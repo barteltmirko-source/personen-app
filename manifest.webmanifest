@@ -1,0 +1,14 @@
+{
+  "name": "Personen-Gedächtnis",
+  "short_name": "Personen",
+  "description": "Private Personen-Datenbank mit Sprachbedienung",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f4f5fa",
+  "theme_color": "#4f6ef7",
+  "lang": "de",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
