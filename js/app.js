@@ -332,6 +332,10 @@ function renderSettings() {
         <h3>KI-Verstehen (Claude)</h3>
         <p class="muted small-text">Für frei formulierte Sprachbefehle. Einfache Fragen beantwortet die App auch ohne Schlüssel.</p>
         <label>Anthropic-API-Schlüssel<input id="s-akey" type="password" value="${esc(s.anthropicKey)}" placeholder="sk-ant-…"></label>
+        <div class="settings-row">
+          <button id="s-akey-save" class="btn primary">Schlüssel speichern</button>
+          <span id="s-akey-status" class="muted">${s.anthropicKey ? "Schlüssel gespeichert ✓" : "Noch kein Schlüssel gespeichert"}</span>
+        </div>
       </div>
 
       <div class="card">
@@ -353,8 +357,13 @@ function renderSettings() {
       </div>
     </div>`;
 
-  document.getElementById("s-gcid").addEventListener("change", e => Settings.set("googleClientId", e.target.value.trim()));
-  document.getElementById("s-akey").addEventListener("change", e => Settings.set("anthropicKey", e.target.value.trim()));
+  document.getElementById("s-gcid").addEventListener("input", e => Settings.set("googleClientId", e.target.value.trim()));
+  document.getElementById("s-akey").addEventListener("input", e => Settings.set("anthropicKey", e.target.value.trim()));
+  document.getElementById("s-akey-save").addEventListener("click", () => {
+    Settings.set("anthropicKey", document.getElementById("s-akey").value.trim());
+    document.getElementById("s-akey-status").textContent =
+      Settings.data.anthropicKey ? "Schlüssel gespeichert ✓" : "Das Feld ist leer.";
+  });
   document.getElementById("s-tts").addEventListener("change", e => Settings.set("ttsEnabled", e.target.checked));
 
   document.getElementById("s-connect").addEventListener("click", async () => {
