@@ -246,6 +246,15 @@ body {
 }
 .form-row { display: flex; gap: 10px; }
 .form-row label { flex: 1; }
+.modal details { margin-bottom: 10px; }
+.modal summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 6px 0;
+  user-select: none;
+}
+.modal details[open] summary { margin-bottom: 8px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
 .picker-list { display: flex; flex-direction: column; gap: 6px; max-height: 50dvh; overflow-y: auto; }

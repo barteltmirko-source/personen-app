@@ -1,7 +1,7 @@
 // nlu.js — Sprachverstehen: erst Regelmuster (kostenlos), dann Claude-API (Hybrid)
 "use strict";
 
-import { Store, Settings, ageText, fullName } from "./store.js";
+import { Store, Settings, ageText, fullName, deceasedSentence } from "./store.js";
 
 // ---------- Öffentliche Schnittstelle ----------
 
@@ -92,6 +92,7 @@ function answerChildren(name) {
 function answerAge(name) {
   const r = resolve(name);
   if (r.error) return { reply: r.error, changed: false };
+  if (r.person.death) return { reply: deceasedSentence(r.person), changed: false };
   const a = ageText(r.person);
   return {
     reply: a === "Alter unbekannt"
@@ -208,8 +209,9 @@ Deine Aufgabe: Verstehe die Eingabe und antworte AUSSCHLIESSLICH mit einem JSON-
 Erlaubte Mutationen (in dieser Reihenfolge ausgeführt):
 - {"op":"create_person","firstName":"...","lastName":"...","birthDate":"YYYY-MM-DD"|null,"birthYear":2010|null,"ageYears":42|null,"company":"..."|null,"position":"..."|null}
   (nutze birthDate wenn volles Datum bekannt, sonst birthYear, sonst ageYears; lastName darf leer sein)
-- {"op":"update_person","person":"Name","firstName":"...","lastName":"...","birthDate":...,"birthYear":...,"ageYears":...,"company":"...","position":"..."}
-  (nur die Felder angeben, die geändert werden sollen; company = Firma, position = Berufsbezeichnung)
+- {"op":"update_person","person":"Name","firstName":"...","lastName":"...","birthDate":...,"birthYear":...,"ageYears":...,"company":"...","position":"...","deceased":true|false,"deathDate":"YYYY-MM-DD"|null,"deathYear":2023|null}
+  (nur die Felder angeben, die geändert werden sollen; company = Firma, position = Berufsbezeichnung.
+   Wenn jemand gestorben ist: deceased:true setzen, plus deathDate oder deathYear falls bekannt. deceased:false macht eine irrtümliche Eintragung rückgängig.)
 - {"op":"set_partner","a":"Name","b":"Name"}
 - {"op":"add_parent_child","parent":"Name","child":"Name"}
 - {"op":"add_relation","from":"Name","label":"Opa","to":"Name"}
@@ -233,6 +235,7 @@ async function askClaude(text) {
       name: fullName(p),
       geburt: p.birth,
       alter: ageText(p),
+      verstorben: p.death ? (p.death.date || p.death.year || true) : false,
       firma: p.company || null,
       position: p.position || null,
       partner: Store.partnerOf(p.id) ? fullName(Store.partnerOf(p.id)) : null,

@@ -294,6 +294,14 @@ function openPersonForm(person) {
           <label>Firma<input id="f-company" value="${esc(person?.company || "")}" placeholder="z. B. Bosch"></label>
           <label>Position<input id="f-position" value="${esc(person?.position || "")}" placeholder="z. B. Teamleiter"></label>
         </div>
+        <details id="f-advanced" ${person?.death ? "open" : ""}>
+          <summary>Erweitert</summary>
+          <label class="toggle-row"><input type="checkbox" id="f-deceased" ${person?.death ? "checked" : ""}> Verstorben</label>
+          <div id="f-death-fields" ${person?.death ? "" : "hidden"}>
+            <label>Todesdatum (falls bekannt)<input id="f-ddate" type="date" value="${person?.death?.date || ""}"></label>
+            <label>… oder Todesjahr<input id="f-dyear" type="number" placeholder="z. B. 2023" value="${(!person?.death?.date && person?.death?.year) ? person.death.year : ""}"></label>
+          </div>
+        </details>
         <div class="modal-actions">
           <button id="f-cancel" class="btn ghost">Abbrechen</button>
           <button id="f-save" class="btn primary">Speichern</button>
@@ -302,6 +310,9 @@ function openPersonForm(person) {
     </div>`;
 
   document.getElementById("f-cancel").addEventListener("click", closeModal);
+  document.getElementById("f-deceased").addEventListener("change", e => {
+    document.getElementById("f-death-fields").hidden = !e.target.checked;
+  });
   document.getElementById("f-save").addEventListener("click", () => {
     const firstName = document.getElementById("f-first").value.trim();
     if (!firstName) { alert("Bitte mindestens einen Vornamen angeben."); return; }
@@ -313,6 +324,9 @@ function openPersonForm(person) {
       ageYears: document.getElementById("f-age").value || null,
       company: document.getElementById("f-company").value.trim(),
       position: document.getElementById("f-position").value.trim(),
+      deceased: document.getElementById("f-deceased").checked,
+      deathDate: document.getElementById("f-deceased").checked ? (document.getElementById("f-ddate").value || null) : null,
+      deathYear: document.getElementById("f-deceased").checked ? (document.getElementById("f-dyear").value || null) : null,
     };
     let target;
     if (isNew) target = Store.createPerson(fields);

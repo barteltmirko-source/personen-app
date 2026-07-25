@@ -23,6 +23,7 @@ export const Store = {
     for (const p of this.db.persons) {
       if (p.company === undefined) p.company = "";
       if (p.position === undefined) p.position = "";
+      if (p.death === undefined) p.death = null;
     }
   },
 
@@ -44,13 +45,14 @@ export const Store = {
 
   newId() { return "p_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); },
 
-  createPerson({ firstName, lastName = "", birthDate = null, birthYear = null, ageYears = null, estimated = false, company = "", position = "" }) {
+  createPerson({ firstName, lastName = "", birthDate = null, birthYear = null, ageYears = null, estimated = false, company = "", position = "", deceased = false, deathDate = null, deathYear = null }) {
     const birth = normalizeBirth({ birthDate, birthYear, ageYears, estimated });
     const p = {
       id: this.newId(),
       firstName: (firstName || "").trim(),
       lastName: (lastName || "").trim(),
       birth,
+      death: normalizeDeath({ deceased, deathDate, deathYear }),
       company: (company || "").trim(),
       position: (position || "").trim(),
       partnerId: null,
@@ -78,6 +80,17 @@ export const Store = {
         ageYears: fields.ageYears ?? null,
         estimated: fields.estimated ?? false,
       }) || p.birth;
+    }
+    if (fields.deceased !== undefined || fields.deathDate !== undefined || fields.deathYear !== undefined) {
+      if (fields.deceased === false) {
+        p.death = null;
+      } else {
+        p.death = normalizeDeath({
+          deceased: fields.deceased ?? true,
+          deathDate: fields.deathDate ?? p.death?.date ?? null,
+          deathYear: fields.deathYear ?? p.death?.year ?? null,
+        });
+      }
     }
     p.updatedAt = new Date().toISOString();
     this.save();
@@ -244,7 +257,8 @@ function norm(s) {
     .replace(/\s+/g, " ");
 }
 
-// birth: { date: "YYYY-MM-DD"|null, year: number|null, estimated: bool }
+// birth: { date: "YYYY-MM-DD"|null, year: number|null, estimated: bool, capturedAt?: "YYYY-MM-DD" }
+// capturedAt = Tag, an dem ein reines Alter erfasst wurde → erlaubt genauere Schätzung.
 function normalizeBirth({ birthDate, birthYear, ageYears, estimated }) {
   if (birthDate) {
     const d = String(birthDate).slice(0, 10);
@@ -256,31 +270,92 @@ function normalizeBirth({ birthDate, birthYear, ageYears, estimated }) {
   }
   if (ageYears !== null && ageYears !== undefined && ageYears !== "") {
     const a = Number(ageYears);
-    if (a >= 0 && a < 130) return { date: null, year: new Date().getFullYear() - a, estimated: true };
+    if (a >= 0 && a < 130) {
+      const today = new Date().toISOString().slice(0, 10);
+      return { date: null, year: new Date().getFullYear() - a, estimated: true, capturedAt: today };
+    }
+  }
+  return null;
+}
+
+// death: null (lebt) | { date: "YYYY-MM-DD"|null, year: number|null }
+function normalizeDeath({ deceased, deathDate, deathYear }) {
+  if (!deceased && !deathDate && !deathYear) return null;
+  const death = { date: null, year: null };
+  if (deathDate) {
+    const d = String(deathDate).slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) { death.date = d; death.year = Number(d.slice(0, 4)); }
+  }
+  if (!death.year && deathYear) {
+    const y = Number(deathYear);
+    if (y > 1880 && y <= new Date().getFullYear()) death.year = y;
+  }
+  return death;
+}
+
+// Volle Jahre zwischen einem Datum und einem Stichtag
+function fullYears(from, until) {
+  let years = until.getFullYear() - from.getFullYear();
+  const hadBirthday = (until.getMonth() > from.getMonth()) ||
+    (until.getMonth() === from.getMonth() && until.getDate() >= from.getDate());
+  if (!hadBirthday) years--;
+  return years;
+}
+
+// Bester bekannter „Geburtstag": exaktes Datum, oder Erfassungstag im geschätzten Geburtsjahr
+function birthAnchor(person) {
+  const b = person.birth;
+  if (!b) return null;
+  if (b.date) return { date: new Date(b.date + "T00:00:00"), estimated: false };
+  if (b.year) {
+    const cap = b.capturedAt || (b.estimated && person.createdAt ? person.createdAt.slice(0, 10) : null);
+    if (b.estimated && cap) {
+      const anchor = new Date(cap + "T00:00:00");
+      anchor.setFullYear(b.year);
+      return { date: anchor, estimated: true };
+    }
+    return { date: new Date(b.year, 0, 1), estimated: b.estimated, yearOnly: true };
   }
   return null;
 }
 
 export function ageOf(person) {
-  const b = person.birth;
-  if (!b) return null;
-  const now = new Date();
-  if (b.date) {
-    const d = new Date(b.date + "T00:00:00");
-    let age = now.getFullYear() - d.getFullYear();
-    const hadBirthday = (now.getMonth() > d.getMonth()) ||
-      (now.getMonth() === d.getMonth() && now.getDate() >= d.getDate());
-    if (!hadBirthday) age--;
-    return { years: age, estimated: false };
+  const anchor = birthAnchor(person);
+  if (!anchor) return null;
+  const until = person.death?.date ? new Date(person.death.date + "T00:00:00")
+    : person.death?.year ? new Date(person.death.year, 11, 31)
+    : new Date();
+  if (person.death && !person.death.date && !person.death.year) return null;
+  if (anchor.yearOnly) {
+    const untilYear = person.death?.year ?? new Date().getFullYear();
+    return { years: untilYear - anchor.date.getFullYear(), estimated: anchor.estimated || !!person.death };
   }
-  if (b.year) return { years: now.getFullYear() - b.year, estimated: b.estimated };
-  return null;
+  return { years: fullYears(anchor.date, until), estimated: anchor.estimated || (!!person.death && !person.death.date) };
 }
 
 export function ageText(person) {
+  if (person.death) {
+    const d = person.death;
+    let when = d.date ? new Date(d.date + "T00:00:00").toLocaleDateString("de-DE") : (d.year || "");
+    let s = when ? `† ${when}` : "verstorben";
+    const a = ageOf(person);
+    if (a) s += `, wurde ${a.estimated ? "ca. " : ""}${a.years} Jahre`;
+    return s;
+  }
   const a = ageOf(person);
   if (!a) return "Alter unbekannt";
   return a.estimated ? `ca. ${a.years} Jahre` : `${a.years} Jahre`;
+}
+
+// Für Sprachantworten: „Peter ist 2023 verstorben und wurde ca. 78 Jahre alt."
+export function deceasedSentence(person) {
+  const d = person.death;
+  if (!d) return null;
+  const when = d.date ? "am " + new Date(d.date + "T00:00:00").toLocaleDateString("de-DE") : (d.year ? String(d.year) : "");
+  let s = `${fullName(person)} ist ${when ? when + " " : ""}verstorben`;
+  const a = ageOf(person);
+  if (a) s += ` und wurde ${a.estimated ? "ca. " : ""}${a.years} Jahre alt`;
+  return s + ".";
 }
 
 export function fullName(p) {
