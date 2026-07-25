@@ -137,6 +137,7 @@ function renderPersons(detailId = null) {
       const kids = Store.childrenOf(p.id);
       const sub = [
         ageText(p),
+        p.company || null,
         partner ? "♥ " + fullName(partner) : null,
         kids.length ? kids.length + (kids.length === 1 ? " Kind" : " Kinder") : null,
         p.notes.length ? "📝 " + p.notes.length : null,
@@ -161,6 +162,10 @@ function renderPersonDetail(id) {
   const partner = Store.partnerOf(id);
   const kids = Store.childrenOf(id);
   const parents = Store.parentsOf(id);
+  const grandparents = Store.grandparentsOf(id);
+  const grandchildren = Store.grandchildrenOf(id);
+  const { outgoing, incoming } = Store.relationsFor(id);
+  const work = [p.position, p.company].filter(Boolean).join(" bei ");
 
   view.innerHTML = `
     <div class="detail">
@@ -171,16 +176,22 @@ function renderPersonDetail(id) {
           <button id="edit" class="btn small">Bearbeiten</button>
         </div>
         <div class="detail-age">${esc(ageText(p))}${p.birth?.date ? " · geb. " + new Date(p.birth.date + "T00:00:00").toLocaleDateString("de-DE") : (p.birth?.year ? " · Jahrgang " + p.birth.year : "")}</div>
+        ${work ? `<div class="detail-age">💼 ${esc(work)}</div>` : ""}
 
-        <h3>Familie</h3>
+        <h3>Familie & Beziehungen</h3>
         <div class="family">
           ${partner ? linkRow("♥ Partner/in", partner) : `<div class="family-row muted">Kein Partner eingetragen</div>`}
           ${parents.map(par => linkRow("↑ Elternteil", par)).join("")}
           ${kids.map(k => linkRow("↓ Kind", k)).join("")}
+          ${grandparents.map(gp => linkRow("↑↑ Großeltern", gp)).join("")}
+          ${grandchildren.map(gc => linkRow("↓↓ Enkel", gc)).join("")}
+          ${outgoing.map(x => relRow(x.rel, `${esc(p.firstName)} ist ${esc(x.rel.label)} von`, x.other)).join("")}
+          ${incoming.map(x => relRow(x.rel, `${esc(x.rel.label)}`, x.other)).join("")}
         </div>
         <div class="family-actions">
           <button id="link-partner" class="btn small ghost">Partner verknüpfen</button>
           <button id="link-child" class="btn small ghost">Kind verknüpfen</button>
+          <button id="link-rel" class="btn small ghost">Beziehung hinzufügen</button>
         </div>
 
         <h3>Notizen</h3>
@@ -210,6 +221,14 @@ function renderPersonDetail(id) {
     </div>`;
   }
 
+  function relRow(rel, label, person) {
+    return `<div class="family-row link" data-id="${person.id}">
+      <span class="family-label">${label}</span>
+      <span>${esc(fullName(person))} <span class="muted">(${esc(ageText(person))})</span></span>
+      <button class="rel-del" data-rel="${rel.id}" title="Beziehung löschen">✕</button>
+    </div>`;
+  }
+
   document.getElementById("back").addEventListener("click", () => renderPersons());
   document.getElementById("edit").addEventListener("click", () => openPersonForm(p));
   view.querySelectorAll(".family-row.link").forEach(row =>
@@ -236,6 +255,17 @@ function renderPersonDetail(id) {
       Store.addParentChild(id, other.id); renderPersonDetail(id);
     }, id));
 
+  document.getElementById("link-rel").addEventListener("click", () => openRelationForm(p));
+
+  view.querySelectorAll(".rel-del").forEach(btn =>
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      if (confirm("Diese Beziehung löschen?")) {
+        Store.removeRelation(btn.dataset.rel);
+        renderPersonDetail(id);
+      }
+    }));
+
   document.getElementById("delete-person").addEventListener("click", () => {
     if (confirm(`${fullName(p)} wirklich löschen? Notizen gehen verloren.`)) {
       Store.deletePerson(id);
@@ -260,6 +290,10 @@ function openPersonForm(person) {
           <label>… oder Geburtsjahr<input id="f-year" type="number" placeholder="z. B. 1984" value="${(!b?.date && b?.year) ? b.year : ""}"></label>
           <label>… oder Alter<input id="f-age" type="number" placeholder="z. B. 42"></label>
         </div>
+        <div class="form-row">
+          <label>Firma<input id="f-company" value="${esc(person?.company || "")}" placeholder="z. B. Bosch"></label>
+          <label>Position<input id="f-position" value="${esc(person?.position || "")}" placeholder="z. B. Teamleiter"></label>
+        </div>
         <div class="modal-actions">
           <button id="f-cancel" class="btn ghost">Abbrechen</button>
           <button id="f-save" class="btn primary">Speichern</button>
@@ -277,6 +311,8 @@ function openPersonForm(person) {
       birthDate: document.getElementById("f-date").value || null,
       birthYear: document.getElementById("f-year").value || null,
       ageYears: document.getElementById("f-age").value || null,
+      company: document.getElementById("f-company").value.trim(),
+      position: document.getElementById("f-position").value.trim(),
     };
     let target;
     if (isNew) target = Store.createPerson(fields);
@@ -284,6 +320,41 @@ function openPersonForm(person) {
     closeModal();
     renderPersonDetail(target.id);
   });
+}
+
+function openRelationForm(p) {
+  const candidates = Store.all().filter(x => x.id !== p.id);
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h2>Beziehung für ${esc(fullName(p))}</h2>
+        <label>Bezeichnung<input id="r-label" placeholder="z. B. Opa, Tante, Nachbar, Chef"></label>
+        <label>Richtung</label>
+        <label class="toggle-row"><input type="radio" name="r-dir" value="out" checked> ${esc(p.firstName)} ist … von der gewählten Person</label>
+        <label class="toggle-row"><input type="radio" name="r-dir" value="in"> Die gewählte Person ist … von ${esc(p.firstName)}</label>
+        <label style="margin-top:10px">Person wählen</label>
+        <div class="picker-list">
+          ${candidates.length === 0 ? `<div class="muted">Keine weiteren Personen vorhanden — lege sie zuerst an.</div>` :
+            candidates.map(c => `<button class="picker-item" data-id="${c.id}">${esc(fullName(c))} <span class="muted">(${esc(ageText(c))})</span></button>`).join("")}
+        </div>
+        <div class="modal-actions">
+          <button id="r-cancel" class="btn ghost">Abbrechen</button>
+        </div>
+      </div>
+    </div>`;
+
+  document.getElementById("r-cancel").addEventListener("click", closeModal);
+  modalRoot.querySelectorAll(".picker-item").forEach(btn =>
+    btn.addEventListener("click", () => {
+      const label = document.getElementById("r-label").value.trim();
+      if (!label) { alert("Bitte zuerst eine Bezeichnung eintragen (z. B. Opa)."); return; }
+      const dir = modalRoot.querySelector('input[name="r-dir"]:checked').value;
+      const other = Store.get(btn.dataset.id);
+      if (dir === "out") Store.addRelation(p.id, other.id, label);
+      else Store.addRelation(other.id, p.id, label);
+      closeModal();
+      renderPersonDetail(p.id);
+    }));
 }
 
 function openPersonPicker(title, onPick, excludeId) {

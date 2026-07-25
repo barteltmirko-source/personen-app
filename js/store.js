@@ -13,7 +13,17 @@ export const Store = {
       const raw = localStorage.getItem(DB_KEY);
       if (raw) this.db = JSON.parse(raw);
     } catch (e) { console.error("DB laden fehlgeschlagen", e); }
+    this.migrate();
     return this.db;
+  },
+
+  // Ältere Datenstände um neue Felder ergänzen
+  migrate() {
+    if (!Array.isArray(this.db.relations)) this.db.relations = [];
+    for (const p of this.db.persons) {
+      if (p.company === undefined) p.company = "";
+      if (p.position === undefined) p.position = "";
+    }
   },
 
   save(markDirty = true) {
@@ -26,6 +36,7 @@ export const Store = {
 
   replaceDb(newDb) {
     this.db = newDb;
+    this.migrate();
     this.save(false);
   },
 
@@ -33,13 +44,15 @@ export const Store = {
 
   newId() { return "p_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); },
 
-  createPerson({ firstName, lastName = "", birthDate = null, birthYear = null, ageYears = null, estimated = false }) {
+  createPerson({ firstName, lastName = "", birthDate = null, birthYear = null, ageYears = null, estimated = false, company = "", position = "" }) {
     const birth = normalizeBirth({ birthDate, birthYear, ageYears, estimated });
     const p = {
       id: this.newId(),
       firstName: (firstName || "").trim(),
       lastName: (lastName || "").trim(),
       birth,
+      company: (company || "").trim(),
+      position: (position || "").trim(),
       partnerId: null,
       parentIds: [],
       notes: [],
@@ -56,6 +69,8 @@ export const Store = {
     if (!p) return null;
     if (fields.firstName !== undefined) p.firstName = fields.firstName.trim();
     if (fields.lastName !== undefined) p.lastName = fields.lastName.trim();
+    if (fields.company !== undefined) p.company = (fields.company || "").trim();
+    if (fields.position !== undefined) p.position = (fields.position || "").trim();
     if (fields.birthDate !== undefined || fields.birthYear !== undefined || fields.ageYears !== undefined) {
       p.birth = normalizeBirth({
         birthDate: fields.birthDate ?? null,
@@ -76,6 +91,7 @@ export const Store = {
       if (p.partnerId === id) p.partnerId = null;
       p.parentIds = p.parentIds.filter(pid => pid !== id);
     }
+    this.db.relations = this.db.relations.filter(r => r.fromId !== id && r.toId !== id);
     this.save();
   },
 
@@ -129,6 +145,56 @@ export const Store = {
   parentsOf(id) {
     const p = this.get(id);
     return p ? p.parentIds.map(pid => this.get(pid)).filter(Boolean) : [];
+  },
+
+  // Abgeleitet: Eltern der Eltern
+  grandparentsOf(id) {
+    const result = new Map();
+    for (const parent of this.parentsOf(id))
+      for (const gp of this.parentsOf(parent.id))
+        result.set(gp.id, gp);
+    return [...result.values()];
+  },
+
+  // Abgeleitet: Kinder der Kinder
+  grandchildrenOf(id) {
+    const result = new Map();
+    for (const child of this.childrenOf(id))
+      for (const gc of this.childrenOf(child.id))
+        result.set(gc.id, gc);
+    return [...result.values()];
+  },
+
+  // ---------- Freie Beziehungen („from ist LABEL von to") ----------
+
+  addRelation(fromId, toId, label) {
+    const clean = (label || "").trim();
+    if (!clean || !this.get(fromId) || !this.get(toId) || fromId === toId) return null;
+    const exists = this.db.relations.find(r =>
+      r.fromId === fromId && r.toId === toId && r.label.toLowerCase() === clean.toLowerCase());
+    if (exists) return exists;
+    const rel = { id: this.newId(), fromId, toId, label: clean };
+    this.db.relations.push(rel);
+    this.save();
+    return rel;
+  },
+
+  removeRelation(relId) {
+    this.db.relations = this.db.relations.filter(r => r.id !== relId);
+    this.save();
+  },
+
+  // Beide Richtungen: outgoing = „Person ist X von …", incoming = „… ist X von Person"
+  relationsFor(id) {
+    const outgoing = this.db.relations
+      .filter(r => r.fromId === id)
+      .map(r => ({ rel: r, other: this.get(r.toId) }))
+      .filter(x => x.other);
+    const incoming = this.db.relations
+      .filter(r => r.toId === id)
+      .map(r => ({ rel: r, other: this.get(r.fromId) }))
+      .filter(x => x.other);
+    return { outgoing, incoming };
   },
 
   // ---------- Notizen ----------

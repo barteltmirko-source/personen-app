@@ -189,6 +189,11 @@ body {
 .family-row.link { cursor: pointer; background: var(--bg); margin-bottom: 6px; }
 .family-row.link:active { outline: 2px solid var(--accent); }
 .family-label { font-size: 0.75rem; color: var(--muted); min-width: 78px; }
+.rel-del {
+  margin-left: auto;
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 0.85rem;
+}
 .family-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 
 .note {

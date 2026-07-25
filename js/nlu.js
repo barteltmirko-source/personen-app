@@ -5,22 +5,35 @@ import { Store, Settings, ageText, fullName } from "./store.js";
 
 // ---------- Öffentliche Schnittstelle ----------
 
+// Gesprächsgedächtnis der aktuellen Sitzung (überlebt keinen Neustart)
+const history = [];
+const HISTORY_LIMIT = 10;
+
+function remember(role, text) {
+  history.push({ role, text });
+  while (history.length > HISTORY_LIMIT) history.shift();
+}
+
 // Verarbeitet eine Nutzereingabe und liefert { reply, changed }.
 export async function handleInput(text) {
   const trimmed = (text || "").trim();
   if (!trimmed) return { reply: "Ich habe nichts gehört.", changed: false };
 
-  const ruleResult = tryRules(trimmed);
-  if (ruleResult) return ruleResult;
-
-  if (!Settings.data.anthropicKey) {
-    return {
-      reply: "Das habe ich mit meinen einfachen Mustern nicht verstanden. " +
-        "Für frei formulierte Eingaben hinterlege bitte in den Einstellungen einen Anthropic-API-Schlüssel.",
-      changed: false,
-    };
+  let result = tryRules(trimmed);
+  if (!result) {
+    if (!Settings.data.anthropicKey) {
+      result = {
+        reply: "Das habe ich mit meinen einfachen Mustern nicht verstanden. " +
+          "Für frei formulierte Eingaben hinterlege bitte in den Einstellungen einen Anthropic-API-Schlüssel.",
+        changed: false,
+      };
+    } else {
+      result = await askClaude(trimmed);
+    }
   }
-  return await askClaude(trimmed);
+  remember("user", trimmed);
+  remember("assistant", result.reply);
+  return result;
 }
 
 // ---------- Regelbasierte Muster ----------
@@ -37,10 +50,16 @@ function tryRules(text) {
     return answerNotes(m[1]);
   if ((m = t.match(/^wer ist (?:der |die )?partner(?:in)? von (.+)$/)))
     return answerPartner(m[1]);
+  if ((m = t.match(/^wer ist (?:der |die |das )?([a-zäöüß]+(?:in)?) von (.+)$/)))
+    return answerRelation(m[1], m[2]); // liefert null, wenn nichts gefunden → Claude
   if ((m = t.match(/^wer ist (.+)$/)))
     return answerWho(m[1]);
   if ((m = t.match(/^(?:wer sind )?(?:die )?eltern von (.+)$/)))
     return answerParents(m[1]);
+  if ((m = t.match(/^(?:wo|bei welcher firma|für wen) arbeitet (.+)$/)))
+    return answerWork(m[1]);
+  if ((m = t.match(/^als was arbeitet (.+)$/)))
+    return answerWork(m[1]);
 
   return null; // kein Muster → Claude
 }
@@ -111,17 +130,65 @@ function answerParents(name) {
   return { reply: `Eltern von ${fullName(r.person)}: ${parents.map(fullName).join(" und ")}.`, changed: false };
 }
 
+function answerWork(name) {
+  const r = resolve(name);
+  if (r.error) return { reply: r.error, changed: false };
+  const p = r.person;
+  if (!p.company && !p.position)
+    return { reply: `Zur Arbeit von ${fullName(p)} ist nichts eingetragen.`, changed: false };
+  let reply = fullName(p) + " arbeitet";
+  if (p.position) reply += ` als ${p.position}`;
+  if (p.company) reply += ` bei ${p.company}`;
+  return { reply: reply + ".", changed: false };
+}
+
+// „Wer ist der Opa von Lena?" — prüft freie Beziehungen + abgeleitete Großeltern/Enkel.
+// Liefert null (→ Claude), wenn das Etikett unbekannt ist oder nichts gefunden wird.
+function answerRelation(labelRaw, name) {
+  const r = resolve(name);
+  if (r.error) return null;
+  const p = r.person;
+  const label = labelRaw.toLowerCase();
+
+  const grandparentWords = ["oma", "opa", "großmutter", "grossmutter", "großvater", "grossvater"];
+  const grandchildWords = ["enkel", "enkelin", "enkelkind"];
+
+  const found = [];
+  const { incoming } = Store.relationsFor(p.id);
+  for (const { rel, other } of incoming) {
+    const rl = rel.label.toLowerCase();
+    if (rl === label || rl === label + "in" || rl + "in" === label) found.push(other);
+  }
+  if (grandparentWords.includes(label))
+    for (const gp of Store.grandparentsOf(p.id))
+      if (!found.some(f => f.id === gp.id)) found.push(gp);
+  if (grandchildWords.includes(label))
+    for (const gc of Store.grandchildrenOf(p.id))
+      if (!found.some(f => f.id === gc.id)) found.push(gc);
+
+  if (!found.length) return null; // Claude darf es mit mehr Kontext versuchen
+  const list = found.map(f => `${fullName(f)} (${ageText(f)})`).join(" und ");
+  return { reply: `${capitalize(labelRaw)} von ${fullName(p)}: ${list}.`, changed: false };
+}
+
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
 function answerWho(name) {
   const r = resolve(name);
   if (r.error) return { reply: r.error, changed: false };
   const p = r.person;
   const parts = [`${fullName(p)}, ${ageText(p)}`];
+  if (p.position || p.company)
+    parts.push(["arbeitet", p.position ? "als " + p.position : "", p.company ? "bei " + p.company : ""].filter(Boolean).join(" "));
   const partner = Store.partnerOf(p.id);
   if (partner) parts.push(`Partner/in: ${fullName(partner)}`);
   const kids = Store.childrenOf(p.id);
   if (kids.length) parts.push(`Kinder: ${kids.map(k => `${k.firstName} (${ageText(k)})`).join(", ")}`);
   const parents = Store.parentsOf(p.id);
   if (parents.length) parts.push(`Kind von ${parents.map(fullName).join(" und ")}`);
+  const { outgoing, incoming } = Store.relationsFor(p.id);
+  for (const { rel, other } of outgoing) parts.push(`${rel.label} von ${fullName(other)}`);
+  for (const { rel, other } of incoming) parts.push(`${fullName(other)} ist ${rel.label}`);
   if (p.notes.length) parts.push(`${p.notes.length} Notiz${p.notes.length > 1 ? "en" : ""} vorhanden`);
   return { reply: parts.join(". ") + ".", changed: false };
 }
@@ -139,12 +206,14 @@ Deine Aufgabe: Verstehe die Eingabe und antworte AUSSCHLIESSLICH mit einem JSON-
 }
 
 Erlaubte Mutationen (in dieser Reihenfolge ausgeführt):
-- {"op":"create_person","firstName":"...","lastName":"...","birthDate":"YYYY-MM-DD"|null,"birthYear":2010|null,"ageYears":42|null}
+- {"op":"create_person","firstName":"...","lastName":"...","birthDate":"YYYY-MM-DD"|null,"birthYear":2010|null,"ageYears":42|null,"company":"..."|null,"position":"..."|null}
   (nutze birthDate wenn volles Datum bekannt, sonst birthYear, sonst ageYears; lastName darf leer sein)
-- {"op":"update_person","person":"Name","firstName":"...","lastName":"...","birthDate":...,"birthYear":...,"ageYears":...}
-  (nur die Felder angeben, die geändert werden sollen)
+- {"op":"update_person","person":"Name","firstName":"...","lastName":"...","birthDate":...,"birthYear":...,"ageYears":...,"company":"...","position":"..."}
+  (nur die Felder angeben, die geändert werden sollen; company = Firma, position = Berufsbezeichnung)
 - {"op":"set_partner","a":"Name","b":"Name"}
 - {"op":"add_parent_child","parent":"Name","child":"Name"}
+- {"op":"add_relation","from":"Name","label":"Opa","to":"Name"}
+  (bedeutet: from ist <label> von to, z.B. "Peter ist Opa von Lena". Für beliebige Beziehungen: Oma, Opa, Onkel, Tante, Cousin, Nachbar, Chef, Freund, ...)
 - {"op":"add_note","person":"Name","text":"..."}
 - {"op":"delete_person","person":"Name"}  (nur wenn der Nutzer das ausdrücklich verlangt)
 
@@ -152,21 +221,30 @@ Regeln:
 - "Name" ist immer ein Name, der die Person eindeutig identifiziert (bevorzugt "Vorname Nachname"). Bei neuen Personen exakt der Name aus create_person.
 - Wenn der Nutzer eine Familie beschreibt (z.B. "Max Mustermann, seine Frau Anna ist 40, Kinder Lena 8 und Tom 5"): lege alle Personen an, verknüpfe Partner, und trage BEIDE Elternteile für jedes Kind ein. Kinder erben den Nachnamen der Eltern, wenn nichts anderes gesagt wird.
 - Prüfe vorher in der Datenbank, ob eine Person schon existiert — dann kein create_person, sondern direkt verknüpfen/aktualisieren.
-- Bei reinen Fragen: beantworte sie aus der Datenbank in "reply", mutations bleibt [].
+- Bei reinen Fragen: beantworte sie aus der Datenbank in "reply", mutations bleibt []. Nutze auch Ableitungen: Großeltern = Eltern der Eltern, Geschwister = gleiche Eltern, Onkel/Tante über die "beziehungen"-Liste.
 - Bei Unklarheiten oder wenn eine Person nicht gefunden wird: erkläre das kurz in "reply", mutations bleibt [].
 - Alter: die Datenbank speichert Geburtsjahre/-daten. "ageYears" wird von der App automatisch in ein geschätztes Geburtsjahr umgerechnet.
+- Der bisherige Gesprächsverlauf wird mitgeschickt: Löse Bezüge wie "er", "sie", "seine Frau", "dort" anhand der letzten Nachrichten auf.
 - Antworte immer knapp und freundlich, wie ein Assistent, der vorgelesen wird. Heutiges Datum: {{TODAY}}.`;
 
 async function askClaude(text) {
-  const dbForClaude = Store.db.persons.map(p => ({
-    name: fullName(p),
-    geburt: p.birth,
-    alter: ageText(p),
-    partner: Store.partnerOf(p.id) ? fullName(Store.partnerOf(p.id)) : null,
-    eltern: Store.parentsOf(p.id).map(fullName),
-    kinder: Store.childrenOf(p.id).map(fullName),
-    notizen: p.notes.map(n => ({ datum: n.date.slice(0, 10), text: n.text })),
-  }));
+  const dbForClaude = {
+    personen: Store.db.persons.map(p => ({
+      name: fullName(p),
+      geburt: p.birth,
+      alter: ageText(p),
+      firma: p.company || null,
+      position: p.position || null,
+      partner: Store.partnerOf(p.id) ? fullName(Store.partnerOf(p.id)) : null,
+      eltern: Store.parentsOf(p.id).map(fullName),
+      kinder: Store.childrenOf(p.id).map(fullName),
+      notizen: p.notes.map(n => ({ datum: n.date.slice(0, 10), text: n.text })),
+    })),
+    beziehungen: Store.db.relations.map(r => {
+      const from = Store.get(r.fromId), to = Store.get(r.toId);
+      return from && to ? `${fullName(from)} ist ${r.label} von ${fullName(to)}` : null;
+    }).filter(Boolean),
+  };
 
   let resp;
   try {
@@ -184,7 +262,12 @@ async function askClaude(text) {
         system: SYSTEM_PROMPT.replace("{{TODAY}}", new Date().toLocaleDateString("de-DE")),
         messages: [{
           role: "user",
-          content: `Datenbank:\n${JSON.stringify(dbForClaude, null, 1)}\n\nEingabe des Nutzers:\n${text}`,
+          content:
+            (history.length
+              ? "Bisheriger Gesprächsverlauf (für Bezüge wie \"er\"/\"sie\"):\n" +
+                history.map(h => (h.role === "user" ? "Nutzer: " : "Assistent: ") + h.text).join("\n") + "\n\n"
+              : "") +
+            `Datenbank:\n${JSON.stringify(dbForClaude, null, 1)}\n\nEingabe des Nutzers:\n${text}`,
         }],
       }),
     });
@@ -235,6 +318,12 @@ function applyMutations(mutations) {
         case "add_parent_child": {
           const parent = mustFind(mut.parent), child = mustFind(mut.child);
           Store.addParentChild(parent.id, child.id);
+          changed = true;
+          break;
+        }
+        case "add_relation": {
+          const from = mustFind(mut.from), to = mustFind(mut.to);
+          Store.addRelation(from.id, to.id, mut.label);
           changed = true;
           break;
         }
