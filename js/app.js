@@ -320,7 +320,7 @@ function renderTreeView(rootId) {
 
   const hint = count === 1 && extraCount === 0
     ? `<p class="muted small-text">Für ${esc(fullName(root))} sind noch keine Familienverbindungen eingetragen. Verknüpfe Partner, Kinder oder Beziehungen auf der Personenseite.</p>`
-    : `<p class="muted small-text">${count} ${count === 1 ? "Person" : "Personen"} in dieser Familie${extraCount ? ` · ${extraCount} weitere verbunden` : ""}${dupCount ? ` · ↗ = steht noch an anderer Stelle im Baum` : ""} · Tippe auf ein Kästchen, um die Person zu öffnen.</p>`;
+    : `<p class="muted small-text">Eltern und alle Generationen darunter · ${count} ${count === 1 ? "Person" : "Personen"}${extraCount ? ` · ${extraCount} weitere verbunden` : ""}${dupCount ? " · ↗ = steht noch an anderer Stelle im Baum" : ""}<br>Tippe auf eine andere Person, um deren Stammbaum zu sehen — auf ${esc(root.firstName)} selbst für die Personenseite.</p>`;
 
   view.innerHTML = `
     <div class="tree-view">
@@ -355,8 +355,13 @@ function renderTreeView(rootId) {
     treeZoom = Math.max(0.25, treeZoom / 1.25); applyTreeZoom();
   });
 
+  // Andere Person → deren Stammbaum; die gewählte Person selbst → ihre Personenseite
   view.querySelectorAll(".tree-node").forEach(node =>
-    node.addEventListener("click", () => renderPersonDetail(node.dataset.id)));
+    node.addEventListener("click", () => {
+      const id = node.dataset.id;
+      if (id === rootId) renderPersonDetail(id);
+      else renderTreeView(id);
+    }));
 }
 
 function applyTreeZoom() {

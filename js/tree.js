@@ -1,4 +1,8 @@
-// tree.js — Stammbaum: Generationen berechnen, anordnen, als SVG zeichnen
+// tree.js — Stammbaum: Ausschnitt bestimmen, anordnen, als SVG zeichnen
+//
+// Ausschnitt: die Eltern der gewählten Person bilden die oberste Reihe, darunter
+// alle ihre Nachkommen (Geschwister, Neffen, Enkel …). Angeheiratete Personen
+// werden ergänzt, damit Elternblöcke vollständig sind, aber nicht weiterverfolgt.
 //
 // Gezeichnet werden ausschließlich Eltern→Kind-Verbindungen, und zwar als einzelne
 // Kurve von jedem Elternteil zu jedem Kind. Nebeneinanderstehen ist reine Anordnung:
@@ -12,95 +16,61 @@ const NODE_W = 142, NODE_H = 54;
 const H_GAP = 30, PAIR_GAP = 14, V_GAP = 82;
 const MARGIN = 26;
 
-// „from ist LABEL von to" → Ebenenversatz von from gegenüber to (negativ = weiter oben).
-// Nur diese Wörter bekommen eine Generation; alles andere landet im Anhang.
-const GEN_OFFSET = {
-  urgrossmutter: -3, urgrossvater: -3, uroma: -3, uropa: -3, urgrosseltern: -3,
-  oma: -2, opa: -2, grossmutter: -2, grossvater: -2, grosseltern: -2,
-  mutter: -1, vater: -1, onkel: -1, tante: -1, pate: -1, patin: -1,
-  stiefvater: -1, stiefmutter: -1, schwiegervater: -1, schwiegermutter: -1,
-  bruder: 0, schwester: 0, geschwister: 0, cousin: 0, cousine: 0,
-  schwager: 0, schwaegerin: 0, ehemann: 0, ehefrau: 0, partner: 0, partnerin: 0,
-  sohn: 1, tochter: 1, neffe: 1, nichte: 1,
-  patenkind: 1, patensohn: 1, patentochter: 1,
-  schwiegersohn: 1, schwiegertochter: 1,
-  enkel: 2, enkelin: 2, enkelkind: 2,
-};
-
-function normLabel(s) {
-  return (s || "").toLowerCase().trim()
-    .replaceAll("ä", "ae").replaceAll("ö", "oe").replaceAll("ü", "ue").replaceAll("ß", "ss")
-    .replace(/[^a-z]/g, "");
-}
-
-// ---------- 1. Familie einsammeln und Generationen vergeben ----------
-
-// BFS über Eltern/Kind/Partner ab einem Startpunkt mit bekannter Generation
-function expandCluster(seedId, seedGen, gen, members) {
-  if (members.has(seedId) || !Store.get(seedId)) return false;
-  const queue = [[seedId, seedGen]];
-  while (queue.length) {
-    const [id, g] = queue.shift();
-    if (members.has(id)) continue;
-    const p = Store.get(id);
-    if (!p) continue;
-    members.add(id);
-    gen.set(id, g);
-    const partner = Store.partnerOf(id);
-    if (partner) queue.push([partner.id, g]);
-    for (const par of Store.parentsOf(id)) queue.push([par.id, g - 1]);
-    for (const ch of Store.childrenOf(id)) queue.push([ch.id, g + 1]);
-  }
-  return true;
-}
+// ---------- 1. Ausschnitt einsammeln und Generationen vergeben ----------
 
 export function buildFamily(rootId) {
   const gen = new Map();
   const members = new Set();
-  const bridgeLabel = new Map(); // personId → Etikett, über das sie dazukam
-  expandCluster(rootId, 0, gen, members);
+  if (!Store.get(rootId)) return { members, gen, extras: [] };
 
-  // Freie Beziehungen als Brücke: holt die ganze Familie der anderen Person dazu
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const rel of Store.db.relations) {
-      const fromIn = members.has(rel.fromId), toIn = members.has(rel.toId);
-      if (fromIn === toIn) continue;
-      const offset = GEN_OFFSET[normLabel(rel.label)];
-      if (offset === undefined) continue; // ohne Generation → Anhang
-      const insideId = fromIn ? rel.fromId : rel.toId;
-      const outsideId = fromIn ? rel.toId : rel.fromId;
-      // GEN_OFFSET beschreibt from relativ zu to
-      const outsideGen = fromIn
-        ? gen.get(insideId) - offset
-        : gen.get(insideId) + offset;
-      if (expandCluster(outsideId, outsideGen, gen, members)) {
-        bridgeLabel.set(outsideId, rel.label);
-        changed = true;
-      }
-    }
+  // Oberste Reihe: die Eltern der gewählten Person — oder sie selbst, wenn keine bekannt
+  const parents = Store.parentsOf(rootId).map(p => p.id);
+  const tops = parents.length ? parents : [rootId];
+
+  // Von dort aus alle Generationen nach unten
+  const queue = tops.map(id => [id, 0]);
+  while (queue.length) {
+    const [id, g] = queue.shift();
+    if (members.has(id) || !Store.get(id)) continue;
+    members.add(id);
+    gen.set(id, g);
+    for (const c of Store.childrenOf(id)) queue.push([c.id, g + 1]);
   }
 
-  // Beziehungen ohne Generationsbedeutung (Nachbar, Chef, …) → abgesetzter Block
+  // Angeheiratete ergänzen (Mit-Eltern und Partner), aber nicht weiterverfolgen
+  const pending = [];
+  for (const id of members) {
+    const p = Store.get(id);
+    for (const c of Store.childrenOf(id))
+      for (const co of Store.parentsOf(c.id))
+        if (!members.has(co.id)) pending.push([co.id, gen.get(c.id) - 1]);
+    if (p.partnerId && !members.has(p.partnerId)) pending.push([p.partnerId, gen.get(id)]);
+  }
+  for (const [id, g] of pending) {
+    if (members.has(id) || !Store.get(id)) continue;
+    members.add(id);
+    gen.set(id, g);
+  }
+
+  // Freie Beziehungen (Tante, Opa, Nachbar …) → abgesetzter Block „Weitere Verbundene"
   const extras = [];
   const seenExtra = new Set();
   for (const rel of Store.db.relations) {
     const fromIn = members.has(rel.fromId), toIn = members.has(rel.toId);
     if (fromIn === toIn) continue;
     const outsideId = fromIn ? rel.toId : rel.fromId;
-    const insideId = fromIn ? rel.fromId : rel.toId;
-    if (members.has(outsideId) || seenExtra.has(outsideId)) continue;
-    const person = Store.get(outsideId), inside = Store.get(insideId);
-    if (!person || !inside) continue;
+    const inside = Store.get(fromIn ? rel.fromId : rel.toId);
+    const person = Store.get(outsideId);
+    if (!person || !inside || seenExtra.has(outsideId)) continue;
     seenExtra.add(outsideId);
+    // Die Beziehung lautet „from ist LABEL von to"
     extras.push({
       person,
-      label: fromIn ? `${rel.label} von ${inside.firstName}` : `${inside.firstName} ist ${rel.label}`,
+      label: fromIn ? `${inside.firstName} ist ${rel.label}` : `${rel.label} von ${inside.firstName}`,
     });
   }
 
-  return { members, gen, bridgeLabel, extras };
+  return { members, gen, extras };
 }
 
 // ---------- 2. Blöcke bilden ----------
@@ -316,7 +286,7 @@ export function renderFamilySvg(rootId) {
   const model = buildBlocks(family, rootId);
   layoutBlocks(family, model);
   const { blocks, primaryOf, childrenByKey } = model;
-  const { bridgeLabel, extras, members } = family;
+  const { extras, members } = family;
 
   // Eine Linie je Elternteil und Kind
   const links = [];
@@ -339,7 +309,6 @@ export function renderFamilySvg(rootId) {
       nodes.push(nodeSvg(Store.get(pid), boxX(b, i), b.y, {
         root: pid === rootId && primaryOf.get(pid) === b,
         duplicate: primaryOf.get(pid) !== b,
-        label: primaryOf.get(pid) === b ? bridgeLabel.get(pid) : null,
       }));
     });
 
