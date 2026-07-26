@@ -1,10 +1,15 @@
 // tree.js — Stammbaum: Generationen berechnen, anordnen, als SVG zeichnen
+//
+// Gezeichnet werden ausschließlich Eltern→Kind-Verbindungen, und zwar als einzelne
+// Kurve von jedem Elternteil zu jedem Kind. Nebeneinanderstehen ist reine Anordnung:
+// Eltern gemeinsamer Kinder bilden einen Block. Wer mit mehreren Partnern Kinder hat,
+// erscheint mehrfach — Zweitkästchen sind als Dublette (↗) gekennzeichnet.
 "use strict";
 
 import { Store, ageText, fullName } from "./store.js";
 
 const NODE_W = 142, NODE_H = 54;
-const H_GAP = 26, COUPLE_GAP = 16, V_GAP = 76;
+const H_GAP = 30, PAIR_GAP = 14, V_GAP = 82;
 const MARGIN = 26;
 
 // „from ist LABEL von to" → Ebenenversatz von from gegenüber to (negativ = weiter oben).
@@ -98,166 +103,248 @@ export function buildFamily(rootId) {
   return { members, gen, bridgeLabel, extras };
 }
 
-// ---------- 2. Anordnen ----------
+// ---------- 2. Blöcke bilden ----------
 
-function unitWidth(u) {
-  return u.personIds.length === 2 ? NODE_W * 2 + COUPLE_GAP : NODE_W;
+// Eltern eines Kindes, auf die Familie beschränkt und stabil sortiert
+function parentKeyOf(person, members) {
+  return person.parentIds.filter(id => members.has(id)).sort().join("|");
 }
 
-// Waagerechte Position einer Person innerhalb ihrer Einheit
-function personX(unit, personId) {
-  if (unit.personIds.length === 1) return unit.x;
-  const half = (NODE_W + COUPLE_GAP) / 2;
-  return unit.personIds[0] === personId ? unit.x - half : unit.x + half;
+export function buildBlocks(family, rootId) {
+  const { members, gen } = family;
+  const blocks = [];
+  const seenKeys = new Set();
+  const placed = new Set();
+
+  const childrenByKey = new Map();
+  for (const id of members) {
+    const key = parentKeyOf(Store.get(id), members);
+    if (!key) continue;
+    if (!childrenByKey.has(key)) childrenByKey.set(key, []);
+    childrenByKey.get(key).push(Store.get(id));
+  }
+
+  const addBlock = (ids, kind) => {
+    const sorted = [...ids].sort();
+    const key = sorted.join("|");
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+    blocks.push({ ids: sorted, key, kind, gen: Math.min(...sorted.map(i => gen.get(i))), x: 0, y: 0 });
+    sorted.forEach(i => placed.add(i));
+  };
+
+  // (a) Elternblöcke — jede vorkommende Elternkombination, die Kinder hat
+  for (const key of childrenByKey.keys()) addBlock(key.split("|"), "parents");
+
+  // (b) Partnerschaften ohne gemeinsame Kinder — stehen nur nebeneinander, keine Linie
+  for (const id of members) {
+    const p = Store.get(id);
+    if (p.partnerId && members.has(p.partnerId)) addBlock([id, p.partnerId], "couple");
+  }
+
+  // (c) alle Übrigen einzeln
+  for (const id of members) if (!placed.has(id)) addBlock([id], "single");
+
+  // Welche Blöcke enthalten eine Person?
+  const blocksOf = new Map();
+  for (const b of blocks)
+    for (const id of b.ids) {
+      if (!blocksOf.has(id)) blocksOf.set(id, []);
+      blocksOf.get(id).push(b);
+    }
+
+  // Abstammungslinie der geöffneten Person: Vorfahren + Nachkommen
+  const rootLine = new Set([rootId]);
+  const walk = (id, next) => {
+    for (const p of next(id)) if (!rootLine.has(p.id)) { rootLine.add(p.id); walk(p.id, next); }
+  };
+  walk(rootId, id => Store.parentsOf(id));
+  walk(rootId, id => Store.childrenOf(id));
+
+  // Hauptkästchen bestimmen: bevorzugt der Zweig, dem die geöffnete Person entstammt
+  const primaryOf = new Map();
+  for (const [id, list] of blocksOf) {
+    if (list.length === 1) { primaryOf.set(id, list[0]); continue; }
+    let best = null, bestScore = -Infinity;
+    for (const b of list) {
+      const kids = childrenByKey.get(b.key) || [];
+      let score = kids.length;
+      if (kids.some(c => rootLine.has(c.id))) score += 100;
+      if (b.ids.some(i => i !== id && rootLine.has(i))) score += 50;
+      if (score > bestScore) { bestScore = score; best = b; }
+    }
+    primaryOf.set(id, best);
+  }
+
+  return { blocks, blocksOf, primaryOf, childrenByKey };
+}
+
+// ---------- 3. Anordnen ----------
+
+const blockWidth = b => b.ids.length * NODE_W + (b.ids.length - 1) * PAIR_GAP;
+
+// Waagerechte Mitte eines Kästchens innerhalb seines Blocks
+function boxX(block, index) {
+  return block.x - blockWidth(block) / 2 + NODE_W / 2 + index * (NODE_W + PAIR_GAP);
 }
 
 function resolveRow(row) {
   row.sort((a, b) => a.x - b.x);
   for (let i = 1; i < row.length; i++) {
-    const minX = row[i - 1].x + unitWidth(row[i - 1]) / 2 + H_GAP + unitWidth(row[i]) / 2;
+    const minX = row[i - 1].x + blockWidth(row[i - 1]) / 2 + H_GAP + blockWidth(row[i]) / 2;
     if (row[i].x < minX) row[i].x = minX;
   }
 }
 
 const avg = arr => arr.reduce((s, v) => s + v, 0) / arr.length;
 
-export function layoutFamily(family) {
-  const { members, gen } = family;
+export function layoutBlocks(family, model) {
+  const { members } = family;
+  const { blocks, primaryOf, childrenByKey } = model;
+  const blockByKey = new Map(blocks.map(b => [b.key, b]));
 
-  // Einheiten bilden: Paare stehen zusammen
-  const unitOf = new Map();
-  const units = [];
-  for (const id of members) {
-    if (unitOf.has(id)) continue;
-    const p = Store.get(id);
-    const partnerId = p.partnerId;
-    const pairs = (partnerId && members.has(partnerId) && gen.get(partnerId) === gen.get(id))
-      ? [id, partnerId].sort((a, b) => fullName(Store.get(a)).localeCompare(fullName(Store.get(b)), "de"))
-      : [id];
-    const unit = { personIds: pairs, gen: gen.get(id), x: 0, y: 0 };
-    units.push(unit);
-    pairs.forEach(pid => unitOf.set(pid, unit));
-  }
+  // Kindblöcke: wo landen die Kinder dieses Elternblocks?
+  const childBlocksOf = b => {
+    const out = new Set();
+    for (const c of childrenByKey.get(b.key) || []) {
+      const pb = primaryOf.get(c.id);
+      if (pb) out.add(pb);
+    }
+    return [...out];
+  };
+  // Elternblöcke: nur für Personen, deren Hauptkästchen in diesem Block liegt
+  const parentBlocksOf = b => {
+    const out = new Set();
+    for (const id of b.ids) {
+      if (primaryOf.get(id) !== b) continue;
+      const key = parentKeyOf(Store.get(id), members);
+      const pb = key && blockByKey.get(key);
+      if (pb) out.add(pb);
+    }
+    return [...out];
+  };
 
   const byGen = new Map();
-  for (const u of units) {
-    if (!byGen.has(u.gen)) byGen.set(u.gen, []);
-    byGen.get(u.gen).push(u);
+  for (const b of blocks) {
+    if (!byGen.has(b.gen)) byGen.set(b.gen, []);
+    byGen.get(b.gen).push(b);
   }
   const gens = [...byGen.keys()].sort((a, b) => a - b);
 
-  // Verwandte Einheiten nachschlagen
-  const childUnitsOf = u => {
-    const out = new Set();
-    for (const pid of u.personIds)
-      for (const c of Store.childrenOf(pid))
-        if (unitOf.has(c.id)) out.add(unitOf.get(c.id));
-    return [...out];
-  };
-  const parentUnitsOf = u => {
-    const out = new Set();
-    for (const pid of u.personIds)
-      for (const par of Store.parentsOf(pid))
-        if (unitOf.has(par.id)) out.add(unitOf.get(par.id));
-    return [...out];
-  };
-
-  // Startaufstellung, dann abwechselnd Eltern über Kinder und Kinder unter Eltern rücken
   for (const g of gens) {
-    byGen.get(g).forEach((u, i) => { u.x = i * (NODE_W + H_GAP); });
+    byGen.get(g).forEach((b, i) => { b.x = i * (NODE_W + H_GAP); });
     resolveRow(byGen.get(g));
   }
-  for (let iter = 0; iter < 40; iter++) {
+  for (let iter = 0; iter < 45; iter++) {
     for (let i = gens.length - 1; i >= 0; i--) {
-      for (const u of byGen.get(gens[i])) {
-        const kids = childUnitsOf(u);
-        if (kids.length) u.x = u.x * 0.35 + avg(kids.map(k => k.x)) * 0.65;
+      for (const b of byGen.get(gens[i])) {
+        const kids = childBlocksOf(b);
+        if (kids.length) b.x = b.x * 0.35 + avg(kids.map(k => k.x)) * 0.65;
       }
       resolveRow(byGen.get(gens[i]));
     }
     for (let i = 0; i < gens.length; i++) {
-      for (const u of byGen.get(gens[i])) {
-        const pars = parentUnitsOf(u);
-        if (pars.length) u.x = u.x * 0.35 + avg(pars.map(p => p.x)) * 0.65;
+      for (const b of byGen.get(gens[i])) {
+        const pars = parentBlocksOf(b);
+        if (pars.length) b.x = b.x * 0.35 + avg(pars.map(p => p.x)) * 0.65;
       }
       resolveRow(byGen.get(gens[i]));
     }
   }
 
-  // Senkrecht einsortieren und linksbündig normalisieren
-  gens.forEach((g, i) => byGen.get(g).forEach(u => { u.y = MARGIN + i * (NODE_H + V_GAP); }));
-  const minX = Math.min(...units.map(u => u.x - unitWidth(u) / 2));
-  units.forEach(u => { u.x += MARGIN - minX; });
+  gens.forEach((g, i) => byGen.get(g).forEach(b => { b.y = MARGIN + i * (NODE_H + V_GAP); }));
+  const minX = Math.min(...blocks.map(b => b.x - blockWidth(b) / 2));
+  blocks.forEach(b => { b.x += MARGIN - minX; });
 
-  return { units, unitOf, byGen, gens, childUnitsOf };
+  // Innerhalb eines Paarblocks die Seite wählen, die näher an der eigenen Herkunft liegt
+  for (const b of blocks) {
+    if (b.ids.length !== 2) continue;
+    const originX = id => {
+      const key = parentKeyOf(Store.get(id), members);
+      const pb = key && blockByKey.get(key);
+      return pb ? pb.x : null;
+    };
+    const [a, c] = [originX(b.ids[0]), originX(b.ids[1])];
+    const flip =
+      (a !== null && c !== null) ? a > c :
+      (a !== null) ? a > b.x :
+      (c !== null) ? c < b.x : false;
+    if (flip) b.ids.reverse();
+  }
+
+  return { blocks, gens, byGen };
 }
 
-// ---------- 3. Zeichnen ----------
+// ---------- 4. Zeichnen ----------
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function shorten(s, max) {
-  return s.length > max ? s.slice(0, max - 1) + "…" : s;
-}
+const shorten = (s, max) => (s.length > max ? s.slice(0, max - 1) + "…" : s);
 
 function nodeSvg(person, x, y, opts = {}) {
   const cls = ["tree-node"];
   if (opts.root) cls.push("is-root");
   if (person.death) cls.push("is-dead");
-  if (opts.dashed) cls.push("is-extra");
+  if (opts.duplicate) cls.push("is-dup");
+  if (opts.extra) cls.push("is-extra");
   const label = opts.label
     ? `<text class="tree-bridge" x="${x}" y="${y - 7}" text-anchor="middle">${esc(shorten(opts.label, 24))}</text>`
+    : "";
+  const dup = opts.duplicate
+    ? `<text class="tree-dup" x="${x + NODE_W / 2 - 9}" y="${y + 15}" text-anchor="middle">↗</text>`
     : "";
   return `<g class="${cls.join(" ")}" data-id="${person.id}">
     ${label}
     <rect x="${x - NODE_W / 2}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="11"/>
     <text class="tree-name" x="${x}" y="${y + 22}" text-anchor="middle">${esc(shorten(fullName(person), 19))}</text>
     <text class="tree-sub" x="${x}" y="${y + 39}" text-anchor="middle">${esc(shorten(ageText(person), 24))}</text>
+    ${dup}
   </g>`;
+}
+
+// Geschwungene Linie von einem Elternteil zu einem Kind
+function curve(px, py, cx, cy) {
+  const dy = cy - py;
+  return `<path class="tree-link" d="M ${px.toFixed(1)} ${py.toFixed(1)} C ${px.toFixed(1)} ${(py + dy * 0.45).toFixed(1)}, ${cx.toFixed(1)} ${(cy - dy * 0.45).toFixed(1)}, ${cx.toFixed(1)} ${cy.toFixed(1)}"/>`;
 }
 
 export function renderFamilySvg(rootId) {
   const family = buildFamily(rootId);
-  const { units, unitOf, childUnitsOf } = layoutFamily(family);
-  const { bridgeLabel, extras } = family;
+  const model = buildBlocks(family, rootId);
+  layoutBlocks(family, model);
+  const { blocks, primaryOf, childrenByKey } = model;
+  const { bridgeLabel, extras, members } = family;
 
+  // Eine Linie je Elternteil und Kind
   const links = [];
-  for (const u of units) {
-    // Kinder dieser Einheit (personenbezogen, damit Stiefeltern nicht mitgezogen werden)
-    const kids = [];
-    for (const pid of u.personIds)
-      for (const c of Store.childrenOf(pid))
-        if (unitOf.has(c.id) && !kids.some(k => k.id === c.id)) kids.push(c);
+  for (const b of blocks) {
+    const kids = childrenByKey.get(b.key) || [];
     if (!kids.length) continue;
-    const fromY = u.y + NODE_H;
-    const busY = fromY + V_GAP / 2;
-    const childXs = kids.map(c => personX(unitOf.get(c.id), c.id));
-    const childY = unitOf.get(kids[0].id).y;
-    links.push(`<path class="tree-link" d="M ${u.x} ${fromY} V ${busY}"/>`);
-    links.push(`<path class="tree-link" d="M ${Math.min(...childXs, u.x)} ${busY} H ${Math.max(...childXs, u.x)}"/>`);
-    for (const cx of childXs)
-      links.push(`<path class="tree-link" d="M ${cx} ${busY} V ${childY}"/>`);
+    b.ids.forEach((pid, i) => {
+      const px = boxX(b, i), py = b.y + NODE_H;
+      for (const c of kids) {
+        const cb = primaryOf.get(c.id);
+        if (!cb) continue;
+        links.push(curve(px, py, boxX(cb, cb.ids.indexOf(c.id)), cb.y));
+      }
+    });
   }
 
   const nodes = [];
-  const hearts = [];
-  for (const u of units) {
-    for (const pid of u.personIds) {
-      const p = Store.get(pid);
-      nodes.push(nodeSvg(p, personX(u, pid), u.y, {
-        root: pid === rootId,
-        label: bridgeLabel.get(pid),
+  for (const b of blocks)
+    b.ids.forEach((pid, i) => {
+      nodes.push(nodeSvg(Store.get(pid), boxX(b, i), b.y, {
+        root: pid === rootId && primaryOf.get(pid) === b,
+        duplicate: primaryOf.get(pid) !== b,
+        label: primaryOf.get(pid) === b ? bridgeLabel.get(pid) : null,
       }));
-    }
-    if (u.personIds.length === 2)
-      hearts.push(`<text class="tree-heart" x="${u.x}" y="${u.y + NODE_H / 2 + 5}" text-anchor="middle">♥</text>`);
-  }
+    });
 
-  let contentW = Math.max(...units.map(u => u.x + unitWidth(u) / 2)) + MARGIN;
-  let contentH = Math.max(...units.map(u => u.y)) + NODE_H + MARGIN;
+  let contentW = Math.max(...blocks.map(b => b.x + blockWidth(b) / 2)) + MARGIN;
+  let contentH = Math.max(...blocks.map(b => b.y)) + NODE_H + MARGIN;
 
   // Anhang: Beziehungen ohne Generation
   const extraParts = [];
@@ -267,18 +354,20 @@ export function renderFamilySvg(rootId) {
     const rowY = sepY + 34;
     extras.forEach((e, i) => {
       const x = MARGIN + NODE_W / 2 + i * (NODE_W + H_GAP);
-      extraParts.push(nodeSvg(e.person, x, rowY, { dashed: true, label: e.label }));
+      extraParts.push(nodeSvg(e.person, x, rowY, { extra: true, label: e.label }));
       contentW = Math.max(contentW, x + NODE_W / 2 + MARGIN);
     });
     contentH = rowY + NODE_H + MARGIN;
   }
 
+  const dupCount = blocks.reduce((n, b) =>
+    n + b.ids.filter(id => primaryOf.get(id) !== b).length, 0);
+
   const svg = `<svg id="tree-svg" viewBox="0 0 ${contentW} ${contentH}" xmlns="http://www.w3.org/2000/svg">
     <g class="tree-links">${links.join("")}</g>
-    ${hearts.join("")}
     ${nodes.join("")}
     ${extraParts.join("")}
   </svg>`;
 
-  return { svg, contentW, contentH, count: family.members.size, extraCount: extras.length };
+  return { svg, contentW, contentH, count: members.size, extraCount: extras.length, dupCount };
 }

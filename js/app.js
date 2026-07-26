@@ -121,7 +121,6 @@ function renderPersons(detailId = null) {
     <div class="persons">
       <div class="toolbar">
         <input id="search" type="search" placeholder="Suchen …">
-        <button id="open-tree" class="btn ghost" title="Stammbaum ansehen">🌳</button>
         <button id="add-person" class="btn primary">+ Neu</button>
       </div>
       <div class="chip-row" id="tag-filter">
@@ -165,10 +164,6 @@ function renderPersons(detailId = null) {
   draw();
   search.addEventListener("input", () => draw(search.value.trim()));
   document.getElementById("add-person").addEventListener("click", () => openPersonForm(null));
-  document.getElementById("open-tree").addEventListener("click", () => {
-    if (Store.all().length === 0) { alert("Lege zuerst eine Person an."); return; }
-    openPersonPicker("Stammbaum von wem?", other => renderTreeView(other.id), null);
-  });
 
   view.querySelectorAll("#tag-filter .chip").forEach(chip =>
     chip.addEventListener("click", () => {
@@ -196,10 +191,7 @@ function renderPersonDetail(id) {
       <div class="card">
         <div class="detail-head">
           <h2>${esc(fullName(p))}</h2>
-          <div class="detail-head-actions">
-            <button id="show-tree" class="btn small ghost" title="Stammbaum">🌳</button>
-            <button id="edit" class="btn small">Bearbeiten</button>
-          </div>
+          <button id="edit" class="btn small">Bearbeiten</button>
         </div>
         <div class="detail-age">${esc(ageText(p))}${p.birth?.date ? " · geb. " + new Date(p.birth.date + "T00:00:00").toLocaleDateString("de-DE") : (p.birth?.year ? " · Jahrgang " + p.birth.year : "")}</div>
         ${work ? `<div class="detail-age">💼 ${esc(work)}</div>` : ""}
@@ -219,6 +211,7 @@ function renderPersonDetail(id) {
           ${outgoing.map(x => relRow(x.rel, `${esc(p.firstName)} ist ${esc(x.rel.label)} von`, x.other)).join("")}
           ${incoming.map(x => relRow(x.rel, `${esc(x.rel.label)}`, x.other)).join("")}
         </div>
+        <button id="show-tree" class="btn tree-open">🌳 Stammbaum ansehen</button>
         <div class="family-actions">
           <button id="link-partner" class="btn small ghost">Partner verknüpfen</button>
           <button id="link-child" class="btn small ghost">Kind verknüpfen</button>
@@ -322,12 +315,12 @@ let treeSize = { w: 0, h: 0 };
 function renderTreeView(rootId) {
   const root = Store.get(rootId);
   if (!root) return renderPersons();
-  const { svg, contentW, contentH, count, extraCount } = renderFamilySvg(rootId);
+  const { svg, contentW, contentH, count, extraCount, dupCount } = renderFamilySvg(rootId);
   treeSize = { w: contentW, h: contentH };
 
   const hint = count === 1 && extraCount === 0
     ? `<p class="muted small-text">Für ${esc(fullName(root))} sind noch keine Familienverbindungen eingetragen. Verknüpfe Partner, Kinder oder Beziehungen auf der Personenseite.</p>`
-    : `<p class="muted small-text">${count} ${count === 1 ? "Person" : "Personen"} in dieser Familie${extraCount ? ` · ${extraCount} weitere verbunden` : ""} · Tippe auf ein Kästchen, um die Person zu öffnen.</p>`;
+    : `<p class="muted small-text">${count} ${count === 1 ? "Person" : "Personen"} in dieser Familie${extraCount ? ` · ${extraCount} weitere verbunden` : ""}${dupCount ? ` · ↗ = steht noch an anderer Stelle im Baum` : ""} · Tippe auf ein Kästchen, um die Person zu öffnen.</p>`;
 
   view.innerHTML = `
     <div class="tree-view">

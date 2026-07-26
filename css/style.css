@@ -277,7 +277,13 @@ body {
 .danger-zone { margin-top: 20px; text-align: center; }
 
 /* ---------- Stammbaum ---------- */
-.detail-head-actions { display: flex; gap: 6px; }
+.tree-open {
+  width: 100%;
+  margin: 10px 0 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--accent);
+}
 
 .tree-bar {
   display: flex;
@@ -302,16 +308,16 @@ body {
 
 .tree-link {
   fill: none;
-  stroke: var(--border);
-  stroke-width: 2;
+  stroke: var(--muted);
+  stroke-width: 1.8;
+  opacity: 0.55;
+  stroke-linecap: round;
 }
 .tree-sep {
   stroke: var(--border);
   stroke-width: 1;
   stroke-dasharray: 5 4;
 }
-.tree-heart { fill: var(--accent); font-size: 15px; opacity: 0.75; }
-
 .tree-node { cursor: pointer; }
 .tree-node rect {
   fill: var(--bg);
@@ -326,6 +332,8 @@ body {
 .tree-node.is-root .tree-name, .tree-node.is-root .tree-sub { fill: #fff; }
 .tree-node.is-dead rect { stroke-dasharray: 4 3; opacity: 0.9; }
 .tree-node.is-extra rect { stroke-dasharray: 5 4; fill: transparent; }
+.tree-node.is-dup rect { stroke-dasharray: 6 4; stroke: var(--accent); opacity: 0.85; }
+.tree-dup { fill: var(--accent); font-size: 12px; font-weight: 700; }
 
 .tree-name {
   fill: var(--text);
