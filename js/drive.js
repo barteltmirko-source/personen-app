@@ -6,6 +6,9 @@ import { Store, Settings } from "./store.js";
 const FILE_NAME = "personen-gedaechtnis.json";
 const SCOPE = "https://www.googleapis.com/auth/drive.file";
 
+// Eingerückt schreiben, damit die Datei in Drive lesbar bleibt
+function serialize() { return JSON.stringify(Store.db, null, 2); }
+
 export const Drive = {
   token: null,
   tokenExpiry: 0,
@@ -83,7 +86,7 @@ export const Drive = {
     const metadata = { name: FILE_NAME, mimeType: "application/json" };
     const body = new FormData();
     body.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-    body.append("file", new Blob([JSON.stringify(Store.db)], { type: "application/json" }));
+    body.append("file", new Blob([serialize()], { type: "application/json" }));
     const resp = await this.api("/upload/drive/v3/files?uploadType=multipart&fields=id", {
       method: "POST", body,
     });
@@ -101,7 +104,7 @@ export const Drive = {
     await this.api(`/upload/drive/v3/files/${fileId}?uploadType=media`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(Store.db),
+      body: serialize(),
     });
   },
 
