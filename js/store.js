@@ -4,6 +4,18 @@
 const DB_KEY = "pg_db_v1";
 const SETTINGS_KEY = "pg_settings_v1";
 
+// Fester Auffang-Tag: kann nicht gelöscht werden, fängt Personen ohne Zuordnung auf
+export const UNSORTED_TAG_ID = "t_unsortiert";
+
+const DEFAULT_TAGS = [
+  { id: UNSORTED_TAG_ID, name: "Unsortiert" },
+  { id: "t_familie1", name: "Familie 1. Grad" },
+  { id: "t_familie2", name: "Familie 2. Grad" },
+  { id: "t_freunde", name: "Freunde" },
+  { id: "t_bekannte", name: "Bekannte" },
+  { id: "t_arbeit", name: "Arbeit" },
+];
+
 export const Store = {
   db: { version: 1, updatedAt: null, persons: [] },
   listeners: [],
@@ -17,14 +29,27 @@ export const Store = {
     return this.db;
   },
 
-  // Ältere Datenstände um neue Felder ergänzen
+  // Ältere Datenstände um neue Felder ergänzen. Ergänzungen werden lokal
+  // festgeschrieben (ohne updatedAt zu ändern, damit der Drive-Vergleich stimmt).
   migrate() {
-    if (!Array.isArray(this.db.relations)) this.db.relations = [];
-    for (const p of this.db.persons) {
-      if (p.company === undefined) p.company = "";
-      if (p.position === undefined) p.position = "";
-      if (p.death === undefined) p.death = null;
+    let touched = false;
+    if (!Array.isArray(this.db.relations)) { this.db.relations = []; touched = true; }
+    if (!Array.isArray(this.db.tags)) { this.db.tags = DEFAULT_TAGS.map(t => ({ ...t })); touched = true; }
+    if (!this.db.tags.some(t => t.id === UNSORTED_TAG_ID)) {
+      this.db.tags.unshift({ id: UNSORTED_TAG_ID, name: "Unsortiert" });
+      touched = true;
     }
+    const validTagIds = new Set(this.db.tags.map(t => t.id));
+    for (const p of this.db.persons) {
+      if (p.company === undefined) { p.company = ""; touched = true; }
+      if (p.position === undefined) { p.position = ""; touched = true; }
+      if (p.death === undefined) { p.death = null; touched = true; }
+      if (!Array.isArray(p.tagIds)) { p.tagIds = []; touched = true; }
+      const cleaned = p.tagIds.filter(id => validTagIds.has(id));
+      if (cleaned.length !== p.tagIds.length) { p.tagIds = cleaned; touched = true; }
+      if (p.tagIds.length === 0) { p.tagIds = [UNSORTED_TAG_ID]; touched = true; }
+    }
+    if (touched) this.save(false);
   },
 
   save(markDirty = true) {
@@ -55,6 +80,7 @@ export const Store = {
       death: normalizeDeath({ deceased, deathDate, deathYear }),
       company: (company || "").trim(),
       position: (position || "").trim(),
+      tagIds: [UNSORTED_TAG_ID],
       partnerId: null,
       parentIds: [],
       notes: [],
@@ -210,6 +236,82 @@ export const Store = {
     return { outgoing, incoming };
   },
 
+  // ---------- Kategorien (Tags) ----------
+
+  allTags() {
+    return [...this.db.tags].sort((a, b) =>
+      a.id === UNSORTED_TAG_ID ? 1 : b.id === UNSORTED_TAG_ID ? -1 : a.name.localeCompare(b.name, "de"));
+  },
+
+  getTag(id) { return this.db.tags.find(t => t.id === id) || null; },
+
+  findTagByName(name) {
+    const q = normTag(name);
+    if (!q) return null;
+    return this.db.tags.find(t => normTag(t.name) === q) ||
+           this.db.tags.find(t => normTag(t.name).startsWith(q)) || null;
+  },
+
+  createTag(name) {
+    const clean = (name || "").trim();
+    if (!clean) return null;
+    const existing = this.findTagByName(clean);
+    if (existing && normTag(existing.name) === normTag(clean)) return existing;
+    const tag = { id: this.newId().replace("p_", "t_"), name: clean };
+    this.db.tags.push(tag);
+    this.save();
+    return tag;
+  },
+
+  renameTag(id, newName) {
+    const tag = this.getTag(id);
+    const clean = (newName || "").trim();
+    if (!tag || !clean || id === UNSORTED_TAG_ID) return false;
+    tag.name = clean;
+    this.save();
+    return true;
+  },
+
+  deleteTag(id) {
+    if (id === UNSORTED_TAG_ID || !this.getTag(id)) return false;
+    this.db.tags = this.db.tags.filter(t => t.id !== id);
+    for (const p of this.db.persons) {
+      p.tagIds = p.tagIds.filter(tid => tid !== id);
+      if (p.tagIds.length === 0) p.tagIds = [UNSORTED_TAG_ID];
+    }
+    this.save();
+    return true;
+  },
+
+  addTagToPerson(personId, tagId) {
+    const p = this.get(personId);
+    if (!p || !this.getTag(tagId)) return;
+    if (!p.tagIds.includes(tagId)) {
+      p.tagIds.push(tagId);
+      // Sobald eine echte Zuordnung existiert, fliegt "Unsortiert" raus
+      if (tagId !== UNSORTED_TAG_ID)
+        p.tagIds = p.tagIds.filter(id => id !== UNSORTED_TAG_ID);
+      this.save();
+    }
+  },
+
+  removeTagFromPerson(personId, tagId) {
+    const p = this.get(personId);
+    if (!p) return;
+    p.tagIds = p.tagIds.filter(id => id !== tagId);
+    if (p.tagIds.length === 0) p.tagIds = [UNSORTED_TAG_ID];
+    this.save();
+  },
+
+  tagsOf(personId) {
+    const p = this.get(personId);
+    return p ? p.tagIds.map(id => this.getTag(id)).filter(Boolean) : [];
+  },
+
+  personsWithTag(tagId) {
+    return this.all().filter(p => p.tagIds.includes(tagId));
+  },
+
   // ---------- Notizen ----------
 
   addNote(personId, text) {
@@ -255,6 +357,11 @@ function norm(s) {
   return (s || "").toLowerCase().trim()
     .replaceAll("ä", "ae").replaceAll("ö", "oe").replaceAll("ü", "ue").replaceAll("ß", "ss")
     .replace(/\s+/g, " ");
+}
+
+// Tag-Namen tolerant vergleichen: "familie 1 grad" trifft "Familie 1. Grad"
+function normTag(s) {
+  return norm(s).replace(/[.\-,]/g, "").replace(/\s+/g, " ").trim();
 }
 
 // birth: { date: "YYYY-MM-DD"|null, year: number|null, estimated: bool, capturedAt?: "YYYY-MM-DD" }

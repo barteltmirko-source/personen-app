@@ -50,6 +50,8 @@ function tryRules(text) {
     return answerNotes(m[1]);
   if ((m = t.match(/^wer ist (?:der |die )?partner(?:in)? von (.+)$/)))
     return answerPartner(m[1]);
+  if ((m = t.match(/^wer (?:ist|sind|gehört)(?: alles)? (?:in|zu|zur|zum) (?:der |die |kategorie |gruppe )?(.+)$/)))
+    return answerTagMembers(m[1]); // liefert null, wenn kein Tag passt → Claude
   if ((m = t.match(/^wer ist (?:der |die |das )?([a-zäöüß]+(?:in)?) von (.+)$/)))
     return answerRelation(m[1], m[2]); // liefert null, wenn nichts gefunden → Claude
   if ((m = t.match(/^wer ist (.+)$/)))
@@ -174,6 +176,17 @@ function answerRelation(labelRaw, name) {
 
 function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
+// „Wer ist alles in Familie 1. Grad?"
+function answerTagMembers(tagNameRaw) {
+  const tag = Store.findTagByName(tagNameRaw);
+  if (!tag) return null; // vielleicht meint der Nutzer etwas anderes → Claude
+  const members = Store.personsWithTag(tag.id);
+  if (members.length === 0)
+    return { reply: `In der Kategorie „${tag.name}" ist niemand.`, changed: false };
+  const list = members.map(p => `${fullName(p)} (${ageText(p)})`).join(", ");
+  return { reply: `In „${tag.name}": ${list}.`, changed: false };
+}
+
 function answerWho(name) {
   const r = resolve(name);
   if (r.error) return { reply: r.error, changed: false };
@@ -190,6 +203,8 @@ function answerWho(name) {
   const { outgoing, incoming } = Store.relationsFor(p.id);
   for (const { rel, other } of outgoing) parts.push(`${rel.label} von ${fullName(other)}`);
   for (const { rel, other } of incoming) parts.push(`${fullName(other)} ist ${rel.label}`);
+  const tags = Store.tagsOf(p.id).map(t => t.name);
+  if (tags.length) parts.push(`Kategorie: ${tags.join(", ")}`);
   if (p.notes.length) parts.push(`${p.notes.length} Notiz${p.notes.length > 1 ? "en" : ""} vorhanden`);
   return { reply: parts.join(". ") + ".", changed: false };
 }
@@ -217,6 +232,9 @@ Erlaubte Mutationen (in dieser Reihenfolge ausgeführt):
 - {"op":"add_relation","from":"Name","label":"Opa","to":"Name"}
   (bedeutet: from ist <label> von to, z.B. "Peter ist Opa von Lena". Für beliebige Beziehungen: Oma, Opa, Onkel, Tante, Cousin, Nachbar, Chef, Freund, ...)
 - {"op":"add_note","person":"Name","text":"..."}
+- {"op":"add_tag","person":"Name","tag":"Freunde"}
+  (ordnet die Person einer Kategorie zu; existiert die Kategorie nicht, wird sie angelegt. Nutze bevorzugt vorhandene Kategorien aus der "kategorien"-Liste.)
+- {"op":"remove_tag","person":"Name","tag":"Freunde"}
 - {"op":"delete_person","person":"Name"}  (nur wenn der Nutzer das ausdrücklich verlangt)
 
 Regeln:
@@ -226,6 +244,7 @@ Regeln:
 - Bei reinen Fragen: beantworte sie aus der Datenbank in "reply", mutations bleibt []. Nutze auch Ableitungen: Großeltern = Eltern der Eltern, Geschwister = gleiche Eltern, Onkel/Tante über die "beziehungen"-Liste.
 - Bei Unklarheiten oder wenn eine Person nicht gefunden wird: erkläre das kurz in "reply", mutations bleibt [].
 - Alter: die Datenbank speichert Geburtsjahre/-daten. "ageYears" wird von der App automatisch in ein geschätztes Geburtsjahr umgerechnet.
+- Kategorien: Jede Person hat mindestens eine Kategorie; ohne Zuordnung automatisch "Unsortiert". Nennt der Nutzer beim Anlegen eine Kategorie, setze sie per add_tag (das entfernt "Unsortiert" automatisch).
 - Der bisherige Gesprächsverlauf wird mitgeschickt: Löse Bezüge wie "er", "sie", "seine Frau", "dort" anhand der letzten Nachrichten auf.
 - Antworte immer knapp und freundlich, wie ein Assistent, der vorgelesen wird. Heutiges Datum: {{TODAY}}.`;
 
@@ -241,8 +260,10 @@ async function askClaude(text) {
       partner: Store.partnerOf(p.id) ? fullName(Store.partnerOf(p.id)) : null,
       eltern: Store.parentsOf(p.id).map(fullName),
       kinder: Store.childrenOf(p.id).map(fullName),
+      kategorien: Store.tagsOf(p.id).map(t => t.name),
       notizen: p.notes.map(n => ({ datum: n.date.slice(0, 10), text: n.text })),
     })),
+    kategorien: Store.allTags().map(t => t.name),
     beziehungen: Store.db.relations.map(r => {
       const from = Store.get(r.fromId), to = Store.get(r.toId);
       return from && to ? `${fullName(from)} ist ${r.label} von ${fullName(to)}` : null;
@@ -334,6 +355,18 @@ function applyMutations(mutations) {
           const p = mustFind(mut.person);
           Store.addNote(p.id, mut.text);
           changed = true;
+          break;
+        }
+        case "add_tag": {
+          const p = mustFind(mut.person);
+          const tag = Store.findTagByName(mut.tag) || Store.createTag(mut.tag);
+          if (tag) { Store.addTagToPerson(p.id, tag.id); changed = true; }
+          break;
+        }
+        case "remove_tag": {
+          const p = mustFind(mut.person);
+          const tag = Store.findTagByName(mut.tag);
+          if (tag) { Store.removeTagFromPerson(p.id, tag.id); changed = true; }
           break;
         }
         case "delete_person": {

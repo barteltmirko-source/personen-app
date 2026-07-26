@@ -1,7 +1,7 @@
 // app.js — Oberfläche und Navigation
 "use strict";
 
-import { Store, Settings, ageText, fullName } from "./store.js";
+import { Store, Settings, ageText, fullName, UNSORTED_TAG_ID } from "./store.js";
 import { handleInput } from "./nlu.js";
 import { Drive } from "./drive.js";
 import { speak, stopSpeaking } from "./speech.js";
@@ -110,15 +110,21 @@ function renderAssistant() {
 
 // ---------- Ansicht: Personen ----------
 
+let activeTagFilter = null; // merkt sich den gewählten Kategorie-Filter
+
 function renderPersons(detailId = null) {
   if (detailId) return renderPersonDetail(detailId);
 
-  const persons = Store.all();
+  const tags = Store.allTags();
   view.innerHTML = `
     <div class="persons">
       <div class="toolbar">
         <input id="search" type="search" placeholder="Suchen …">
         <button id="add-person" class="btn primary">+ Neu</button>
+      </div>
+      <div class="chip-row" id="tag-filter">
+        <button class="chip ${activeTagFilter === null ? "active" : ""}" data-tag="">Alle</button>
+        ${tags.map(t => `<button class="chip ${activeTagFilter === t.id ? "active" : ""}" data-tag="${t.id}">${esc(t.name)}</button>`).join("")}
       </div>
       <div id="person-list" class="person-list"></div>
     </div>`;
@@ -127,9 +133,10 @@ function renderPersons(detailId = null) {
   const search = document.getElementById("search");
 
   function draw(filter = "") {
-    const items = filter ? Store.findByName(filter) : persons;
+    let items = filter ? Store.findByName(filter) : Store.all();
+    if (activeTagFilter) items = items.filter(p => p.tagIds.includes(activeTagFilter));
     if (items.length === 0) {
-      list.innerHTML = `<div class="empty">${filter ? `Keine Treffer.` : `Noch keine Personen.<br>Lege die erste über „+ Neu“ oder den Assistenten an.`}</div>`;
+      list.innerHTML = `<div class="empty">${(filter || activeTagFilter) ? `Keine Treffer.` : `Noch keine Personen.<br>Lege die erste über „+ Neu“ oder den Assistenten an.`}</div>`;
       return;
     }
     list.innerHTML = items.map(p => {
@@ -142,9 +149,11 @@ function renderPersons(detailId = null) {
         kids.length ? kids.length + (kids.length === 1 ? " Kind" : " Kinder") : null,
         p.notes.length ? "📝 " + p.notes.length : null,
       ].filter(Boolean).join(" · ");
+      const personTags = Store.tagsOf(p.id);
       return `<div class="card person-card" data-id="${p.id}">
         <div class="person-name">${esc(fullName(p))}</div>
         <div class="person-sub">${esc(sub)}</div>
+        <div class="tag-line">${personTags.map(t => `<span class="tag-badge${t.id === UNSORTED_TAG_ID ? " unsorted" : ""}">${esc(t.name)}</span>`).join("")}</div>
       </div>`;
     }).join("");
     list.querySelectorAll(".person-card").forEach(card =>
@@ -154,6 +163,14 @@ function renderPersons(detailId = null) {
   draw();
   search.addEventListener("input", () => draw(search.value.trim()));
   document.getElementById("add-person").addEventListener("click", () => openPersonForm(null));
+
+  view.querySelectorAll("#tag-filter .chip").forEach(chip =>
+    chip.addEventListener("click", () => {
+      activeTagFilter = chip.dataset.tag || null;
+      view.querySelectorAll("#tag-filter .chip").forEach(c =>
+        c.classList.toggle("active", (c.dataset.tag || null) === activeTagFilter));
+      draw(search.value.trim());
+    }));
 }
 
 function renderPersonDetail(id) {
@@ -177,6 +194,11 @@ function renderPersonDetail(id) {
         </div>
         <div class="detail-age">${esc(ageText(p))}${p.birth?.date ? " · geb. " + new Date(p.birth.date + "T00:00:00").toLocaleDateString("de-DE") : (p.birth?.year ? " · Jahrgang " + p.birth.year : "")}</div>
         ${work ? `<div class="detail-age">💼 ${esc(work)}</div>` : ""}
+
+        <h3>Kategorien</h3>
+        <div class="chip-row" id="detail-tags">
+          ${Store.allTags().map(t => `<button class="chip ${p.tagIds.includes(t.id) ? "active" : ""}" data-tag="${t.id}">${esc(t.name)}</button>`).join("")}
+        </div>
 
         <h3>Familie & Beziehungen</h3>
         <div class="family">
@@ -257,6 +279,14 @@ function renderPersonDetail(id) {
 
   document.getElementById("link-rel").addEventListener("click", () => openRelationForm(p));
 
+  view.querySelectorAll("#detail-tags .chip").forEach(chip =>
+    chip.addEventListener("click", () => {
+      const tagId = chip.dataset.tag;
+      if (Store.get(id).tagIds.includes(tagId)) Store.removeTagFromPerson(id, tagId);
+      else Store.addTagToPerson(id, tagId);
+      renderPersonDetail(id);
+    }));
+
   view.querySelectorAll(".rel-del").forEach(btn =>
     btn.addEventListener("click", e => {
       e.stopPropagation();
@@ -294,6 +324,11 @@ function openPersonForm(person) {
           <label>Firma<input id="f-company" value="${esc(person?.company || "")}" placeholder="z. B. Bosch"></label>
           <label>Position<input id="f-position" value="${esc(person?.position || "")}" placeholder="z. B. Teamleiter"></label>
         </div>
+        <label>Kategorien</label>
+        <div class="chip-row" id="f-tags">
+          ${Store.allTags().filter(t => t.id !== UNSORTED_TAG_ID).map(t =>
+            `<button type="button" class="chip ${person?.tagIds?.includes(t.id) ? "active" : ""}" data-tag="${t.id}">${esc(t.name)}</button>`).join("")}
+        </div>
         <details id="f-advanced" ${person?.death ? "open" : ""}>
           <summary>Erweitert</summary>
           <label class="toggle-row"><input type="checkbox" id="f-deceased" ${person?.death ? "checked" : ""}> Verstorben</label>
@@ -313,6 +348,8 @@ function openPersonForm(person) {
   document.getElementById("f-deceased").addEventListener("change", e => {
     document.getElementById("f-death-fields").hidden = !e.target.checked;
   });
+  modalRoot.querySelectorAll("#f-tags .chip").forEach(chip =>
+    chip.addEventListener("click", () => chip.classList.toggle("active")));
   document.getElementById("f-save").addEventListener("click", () => {
     const firstName = document.getElementById("f-first").value.trim();
     if (!firstName) { alert("Bitte mindestens einen Vornamen angeben."); return; }
@@ -331,6 +368,14 @@ function openPersonForm(person) {
     let target;
     if (isNew) target = Store.createPerson(fields);
     else target = Store.updatePerson(person.id, fields);
+
+    const chosen = [...modalRoot.querySelectorAll("#f-tags .chip.active")].map(c => c.dataset.tag);
+    for (const tagId of Store.allTags().map(t => t.id)) {
+      if (tagId === UNSORTED_TAG_ID) continue;
+      if (chosen.includes(tagId)) Store.addTagToPerson(target.id, tagId);
+      else Store.removeTagFromPerson(target.id, tagId);
+    }
+
     closeModal();
     renderPersonDetail(target.id);
   });
@@ -424,6 +469,28 @@ function renderSettings() {
       </div>
 
       <div class="card">
+        <h3>Kategorien</h3>
+        <p class="muted small-text">Jede Person gehört zu mindestens einer Kategorie. „Unsortiert" ist das Auffangnetz und lässt sich nicht löschen.</p>
+        <div id="tag-admin" class="tag-admin">
+          ${Store.allTags().map(t => {
+            const count = Store.personsWithTag(t.id).length;
+            const locked = t.id === UNSORTED_TAG_ID;
+            return `<div class="tag-admin-row" data-tag="${t.id}">
+              <span class="tag-admin-name">${esc(t.name)}</span>
+              <span class="muted tag-admin-count">${count}</span>
+              ${locked ? `<span class="muted small-text">fest</span>` : `
+                <button class="btn small ghost tag-rename">Umbenennen</button>
+                <button class="btn small ghost danger tag-delete">Löschen</button>`}
+            </div>`;
+          }).join("")}
+        </div>
+        <div class="input-row" style="margin-top:10px">
+          <input id="new-tag" placeholder="Neue Kategorie …">
+          <button id="add-tag" class="btn primary">+</button>
+        </div>
+      </div>
+
+      <div class="card">
         <h3>Sprachausgabe</h3>
         <label class="toggle-row">
           <input type="checkbox" id="s-tts" ${s.ttsEnabled ? "checked" : ""}>
@@ -450,6 +517,35 @@ function renderSettings() {
       Settings.data.anthropicKey ? "Schlüssel gespeichert ✓" : "Das Feld ist leer.";
   });
   document.getElementById("s-tts").addEventListener("change", e => Settings.set("ttsEnabled", e.target.checked));
+
+  const newTagInput = document.getElementById("new-tag");
+  document.getElementById("add-tag").addEventListener("click", () => {
+    if (!newTagInput.value.trim()) return;
+    Store.createTag(newTagInput.value);
+    renderSettings();
+  });
+  newTagInput.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); document.getElementById("add-tag").click(); }
+  });
+
+  view.querySelectorAll(".tag-rename").forEach(btn =>
+    btn.addEventListener("click", () => {
+      const row = btn.closest(".tag-admin-row");
+      const tag = Store.getTag(row.dataset.tag);
+      const name = prompt(`Kategorie „${tag.name}" umbenennen in:`, tag.name);
+      if (name && name.trim()) { Store.renameTag(tag.id, name); renderSettings(); }
+    }));
+
+  view.querySelectorAll(".tag-delete").forEach(btn =>
+    btn.addEventListener("click", () => {
+      const row = btn.closest(".tag-admin-row");
+      const tag = Store.getTag(row.dataset.tag);
+      const count = Store.personsWithTag(tag.id).length;
+      const warn = count
+        ? `\n\n${count} ${count === 1 ? "Person verliert" : "Personen verlieren"} diese Kategorie; wer danach keine mehr hat, wird „Unsortiert".`
+        : "";
+      if (confirm(`Kategorie „${tag.name}" löschen?${warn}`)) { Store.deleteTag(tag.id); renderSettings(); }
+    }));
 
   document.getElementById("s-connect").addEventListener("click", async () => {
     Settings.set("googleClientId", document.getElementById("s-gcid").value.trim());

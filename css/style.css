@@ -172,6 +172,69 @@ body {
 .person-name { font-weight: 600; font-size: 1.05rem; }
 .person-sub { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
 
+/* ---------- Kategorien (Tags) ---------- */
+.chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.chip {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 13px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.tag-line { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 7px; }
+.tag-badge {
+  font-size: 0.7rem;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.tag-badge.unsorted { opacity: 0.65; font-style: italic; }
+
+.tag-admin { display: flex; flex-direction: column; gap: 6px; }
+.tag-admin-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--bg);
+  border-radius: 9px;
+}
+.tag-admin-name { flex: 1; font-weight: 500; }
+.tag-admin-count {
+  font-size: 0.78rem;
+  min-width: 22px;
+  text-align: right;
+}
+.settings .input-row input {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+  background: var(--card);
+  color: var(--text);
+  margin-top: 0;
+}
+
 /* ---------- Detail ---------- */
 .detail-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .detail-head h2 { font-size: 1.3rem; }
