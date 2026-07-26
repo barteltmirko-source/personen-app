@@ -7,6 +7,7 @@ const SHELL = [
   "js/app.js",
   "js/store.js",
   "js/nlu.js",
+  "js/tree.js",
   "js/drive.js",
   "js/speech.js",
   "manifest.webmanifest",

@@ -276,6 +276,75 @@ body {
 }
 .danger-zone { margin-top: 20px; text-align: center; }
 
+/* ---------- Stammbaum ---------- */
+.detail-head-actions { display: flex; gap: 6px; }
+
+.tree-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.tree-title { font-weight: 600; flex: 1; }
+.tree-zoom { display: flex; gap: 4px; }
+
+.tree-canvas {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px;
+  max-height: 74dvh;
+}
+.tree-canvas svg { display: block; }
+
+.tree-link {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 2;
+}
+.tree-sep {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+}
+.tree-heart { fill: var(--accent); font-size: 15px; opacity: 0.75; }
+
+.tree-node { cursor: pointer; }
+.tree-node rect {
+  fill: var(--bg);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+.tree-node:active rect { stroke: var(--accent); }
+.tree-node.is-root rect {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+.tree-node.is-root .tree-name, .tree-node.is-root .tree-sub { fill: #fff; }
+.tree-node.is-dead rect { stroke-dasharray: 4 3; opacity: 0.9; }
+.tree-node.is-extra rect { stroke-dasharray: 5 4; fill: transparent; }
+
+.tree-name {
+  fill: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.tree-sub {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.tree-bridge {
+  fill: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
 /* ---------- Modal ---------- */
 .modal-backdrop {
   position: fixed; inset: 0;

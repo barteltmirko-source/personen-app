@@ -2,6 +2,7 @@
 "use strict";
 
 import { Store, Settings, ageText, fullName, UNSORTED_TAG_ID } from "./store.js";
+import { renderFamilySvg } from "./tree.js";
 import { handleInput } from "./nlu.js";
 import { Drive } from "./drive.js";
 import { speak, stopSpeaking } from "./speech.js";
@@ -120,6 +121,7 @@ function renderPersons(detailId = null) {
     <div class="persons">
       <div class="toolbar">
         <input id="search" type="search" placeholder="Suchen …">
+        <button id="open-tree" class="btn ghost" title="Stammbaum ansehen">🌳</button>
         <button id="add-person" class="btn primary">+ Neu</button>
       </div>
       <div class="chip-row" id="tag-filter">
@@ -163,6 +165,10 @@ function renderPersons(detailId = null) {
   draw();
   search.addEventListener("input", () => draw(search.value.trim()));
   document.getElementById("add-person").addEventListener("click", () => openPersonForm(null));
+  document.getElementById("open-tree").addEventListener("click", () => {
+    if (Store.all().length === 0) { alert("Lege zuerst eine Person an."); return; }
+    openPersonPicker("Stammbaum von wem?", other => renderTreeView(other.id), null);
+  });
 
   view.querySelectorAll("#tag-filter .chip").forEach(chip =>
     chip.addEventListener("click", () => {
@@ -190,7 +196,10 @@ function renderPersonDetail(id) {
       <div class="card">
         <div class="detail-head">
           <h2>${esc(fullName(p))}</h2>
-          <button id="edit" class="btn small">Bearbeiten</button>
+          <div class="detail-head-actions">
+            <button id="show-tree" class="btn small ghost" title="Stammbaum">🌳</button>
+            <button id="edit" class="btn small">Bearbeiten</button>
+          </div>
         </div>
         <div class="detail-age">${esc(ageText(p))}${p.birth?.date ? " · geb. " + new Date(p.birth.date + "T00:00:00").toLocaleDateString("de-DE") : (p.birth?.year ? " · Jahrgang " + p.birth.year : "")}</div>
         ${work ? `<div class="detail-age">💼 ${esc(work)}</div>` : ""}
@@ -253,6 +262,7 @@ function renderPersonDetail(id) {
 
   document.getElementById("back").addEventListener("click", () => renderPersons());
   document.getElementById("edit").addEventListener("click", () => openPersonForm(p));
+  document.getElementById("show-tree").addEventListener("click", () => renderTreeView(id));
   view.querySelectorAll(".family-row.link").forEach(row =>
     row.addEventListener("click", () => renderPersonDetail(row.dataset.id)));
 
@@ -302,6 +312,65 @@ function renderPersonDetail(id) {
       renderPersons();
     }
   });
+}
+
+// ---------- Ansicht: Stammbaum ----------
+
+let treeZoom = 1;
+let treeSize = { w: 0, h: 0 };
+
+function renderTreeView(rootId) {
+  const root = Store.get(rootId);
+  if (!root) return renderPersons();
+  const { svg, contentW, contentH, count, extraCount } = renderFamilySvg(rootId);
+  treeSize = { w: contentW, h: contentH };
+
+  const hint = count === 1 && extraCount === 0
+    ? `<p class="muted small-text">Für ${esc(fullName(root))} sind noch keine Familienverbindungen eingetragen. Verknüpfe Partner, Kinder oder Beziehungen auf der Personenseite.</p>`
+    : `<p class="muted small-text">${count} ${count === 1 ? "Person" : "Personen"} in dieser Familie${extraCount ? ` · ${extraCount} weitere verbunden` : ""} · Tippe auf ein Kästchen, um die Person zu öffnen.</p>`;
+
+  view.innerHTML = `
+    <div class="tree-view">
+      <div class="tree-bar">
+        <button id="tree-back" class="btn ghost small">‹ Zurück</button>
+        <span class="tree-title">${esc(fullName(root))}</span>
+        <div class="tree-zoom">
+          <button id="tree-out" class="btn ghost small">−</button>
+          <button id="tree-fit" class="btn ghost small">Passend</button>
+          <button id="tree-in" class="btn ghost small">+</button>
+        </div>
+      </div>
+      ${hint}
+      <div id="tree-canvas" class="tree-canvas">${svg}</div>
+    </div>`;
+
+  const canvas = document.getElementById("tree-canvas");
+  // Beim Öffnen lesbar bleiben (notfalls seitlich scrollen); "Passend" zeigt die Übersicht
+  const fitTo = minZoom => {
+    const avail = canvas.clientWidth - 6;
+    treeZoom = Math.min(1, Math.max(minZoom, avail / treeSize.w));
+    applyTreeZoom();
+  };
+  fitTo(0.6);
+
+  document.getElementById("tree-back").addEventListener("click", () => renderPersonDetail(rootId));
+  document.getElementById("tree-fit").addEventListener("click", () => fitTo(0.2));
+  document.getElementById("tree-in").addEventListener("click", () => {
+    treeZoom = Math.min(2.2, treeZoom * 1.25); applyTreeZoom();
+  });
+  document.getElementById("tree-out").addEventListener("click", () => {
+    treeZoom = Math.max(0.25, treeZoom / 1.25); applyTreeZoom();
+  });
+
+  view.querySelectorAll(".tree-node").forEach(node =>
+    node.addEventListener("click", () => renderPersonDetail(node.dataset.id)));
+}
+
+function applyTreeZoom() {
+  const svg = document.getElementById("tree-svg");
+  if (!svg) return;
+  svg.setAttribute("width", Math.round(treeSize.w * treeZoom));
+  svg.setAttribute("height", Math.round(treeSize.h * treeZoom));
 }
 
 // ---------- Formular: Person anlegen/bearbeiten ----------
