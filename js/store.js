@@ -469,6 +469,35 @@ export function fullName(p) {
   return [p.firstName, p.lastName].filter(Boolean).join(" ");
 }
 
+// ---------- Privat/Geschäftlich ----------
+
+// Kategorien sind eine reine Ordnungshilfe und werden nie als Eigenschaft einer
+// Person genannt. Nach außen dringt nur diese grobe Einordnung — abgeleitet am
+// Kategorienamen, damit auch selbst angelegte Kategorien einsortiert werden.
+const BUSINESS_TAG_WORDS = [
+  "arbeit", "job", "beruf", "kolleg", "firma", "buero", "geschaeft",
+  "kunde", "business", "chef", "mandant", "lieferant", "dienst",
+];
+
+export function isBusinessTagName(name) {
+  const n = norm(name);
+  return BUSINESS_TAG_WORDS.some(w => n.includes(w));
+}
+
+// "privat" | "geschaeftlich" | "beides" | null (nichts zugeordnet außer "Unsortiert")
+export function contextOf(person) {
+  const relevant = Store.tagsOf(person.id).filter(t => t.id !== UNSORTED_TAG_ID);
+  if (!relevant.length) return null;
+  const business = relevant.some(t => isBusinessTagName(t.name));
+  const priv = relevant.some(t => !isBusinessTagName(t.name));
+  if (business && priv) return "beides";
+  return business ? "geschaeftlich" : "privat";
+}
+
+export function contextLabel(person) {
+  return { privat: "privat", geschaeftlich: "geschäftlich", beides: "privat und geschäftlich" }[contextOf(person)] || null;
+}
+
 // ---------- Einstellungen ----------
 
 export const Settings = {

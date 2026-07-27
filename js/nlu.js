@@ -1,7 +1,7 @@
 // nlu.js — Sprachverstehen: erst Regelmuster (kostenlos), dann Claude-API (Hybrid)
 "use strict";
 
-import { Store, Settings, ageText, fullName, deceasedSentence } from "./store.js";
+import { Store, Settings, ageText, fullName, deceasedSentence, contextLabel } from "./store.js";
 
 // ---------- Öffentliche Schnittstelle ----------
 
@@ -50,6 +50,8 @@ function tryRules(text) {
     return answerNotes(m[1]);
   if ((m = t.match(/^wer ist (?:der |die )?partner(?:in)? von (.+)$/)))
     return answerPartner(m[1]);
+  if ((m = t.match(/^woher (?:kenne ich|kennst du|kennt man|kennen wir) (.+)$/)))
+    return answerContext(m[1]);
   if ((m = t.match(/^wer (?:ist|sind|gehört)(?: alles)? (?:in|zu|zur|zum) (?:der |die |kategorie |gruppe )?(.+)$/)))
     return answerTagMembers(m[1]); // liefert null, wenn kein Tag passt → Claude
   if ((m = t.match(/^wer ist (?:der |die |das )?([a-zäöüß]+(?:in)?) von (.+)$/)))
@@ -187,6 +189,19 @@ function answerTagMembers(tagNameRaw) {
   return { reply: `In „${tag.name}": ${list}.`, changed: false };
 }
 
+// „Woher kenne ich Anna?" — nennt nur privat/geschäftlich, nie die Kategorie selbst.
+function answerContext(name) {
+  const r = resolve(name);
+  if (r.error) return { reply: r.error, changed: false };
+  const label = contextLabel(r.person);
+  if (!label)
+    return { reply: `Woher du ${fullName(r.person)} kennst, ist nicht hinterlegt.`, changed: false };
+  const wording = label === "privat und geschäftlich"
+    ? "sowohl privat als auch geschäftlich"
+    : `aus dem ${label === "privat" ? "privaten" : "geschäftlichen"} Umfeld`;
+  return { reply: `${fullName(r.person)} kennst du ${wording}.`, changed: false };
+}
+
 function answerWho(name) {
   const r = resolve(name);
   if (r.error) return { reply: r.error, changed: false };
@@ -203,8 +218,7 @@ function answerWho(name) {
   const { outgoing, incoming } = Store.relationsFor(p.id);
   for (const { rel, other } of outgoing) parts.push(`${rel.label} von ${fullName(other)}`);
   for (const { rel, other } of incoming) parts.push(`${fullName(other)} ist ${rel.label}`);
-  const tags = Store.tagsOf(p.id).map(t => t.name);
-  if (tags.length) parts.push(`Kategorie: ${tags.join(", ")}`);
+  // Kategorien bleiben bewusst außen vor — siehe answerContext für privat/geschäftlich.
   if (p.notes.length) parts.push(`${p.notes.length} Notiz${p.notes.length > 1 ? "en" : ""} vorhanden`);
   return { reply: parts.join(". ") + ".", changed: false };
 }
@@ -233,7 +247,7 @@ Erlaubte Mutationen (in dieser Reihenfolge ausgeführt):
   (bedeutet: from ist <label> von to, z.B. "Peter ist Opa von Lena". Für beliebige Beziehungen: Oma, Opa, Onkel, Tante, Cousin, Nachbar, Chef, Freund, ...)
 - {"op":"add_note","person":"Name","text":"..."}
 - {"op":"add_tag","person":"Name","tag":"Freunde"}
-  (ordnet die Person einer Kategorie zu; existiert die Kategorie nicht, wird sie angelegt. Nutze bevorzugt vorhandene Kategorien aus der "kategorien"-Liste.)
+  (ordnet die Person einer Kategorie zu; existiert die Kategorie nicht, wird sie angelegt. Nutze bevorzugt vorhandene Kategorien aus der "verfuegbareKategorien"-Liste.)
 - {"op":"remove_tag","person":"Name","tag":"Freunde"}
 - {"op":"delete_person","person":"Name"}  (nur wenn der Nutzer das ausdrücklich verlangt)
 
@@ -244,7 +258,9 @@ Regeln:
 - Bei reinen Fragen: beantworte sie aus der Datenbank in "reply", mutations bleibt []. Nutze auch Ableitungen: Großeltern = Eltern der Eltern, Geschwister = gleiche Eltern, Onkel/Tante über die "beziehungen"-Liste.
 - Bei Unklarheiten oder wenn eine Person nicht gefunden wird: erkläre das kurz in "reply", mutations bleibt [].
 - Alter: die Datenbank speichert Geburtsjahre/-daten. "ageYears" wird von der App automatisch in ein geschätztes Geburtsjahr umgerechnet.
-- Kategorien: Jede Person hat mindestens eine Kategorie; ohne Zuordnung automatisch "Unsortiert". Nennt der Nutzer beim Anlegen eine Kategorie, setze sie per add_tag (das entfernt "Unsortiert" automatisch).
+- Kategorien sind eine rein interne Ordnungshilfe. Nenne in "reply" NIEMALS einen Kategorienamen und behandle die Kategorie einer Person nie als Auskunft über sie — auch nicht auf Nachfrage, bei Zusammenfassungen ("Wer ist X?") oder Aufzählungen. Deshalb steht bei jeder Person nur das Feld "kontext" (privat / geschäftlich / privat und geschäftlich / null).
+- Fragt der Nutzer, woher er jemanden kennt, nenne ausschließlich diesen groben "kontext" (z. B. "Anna kennst du aus dem privaten Umfeld."). Ist "kontext" null, sage, dass dazu nichts hinterlegt ist.
+- Zuordnen bleibt erlaubt: Nennt der Nutzer beim Anlegen eine Kategorie, setze sie per add_tag (das entfernt "Unsortiert" automatisch); bestätige das ohne den Kategorienamen zu wiederholen. Jede Person hat mindestens eine Kategorie; ohne Zuordnung automatisch "Unsortiert".
 - Der bisherige Gesprächsverlauf wird mitgeschickt: Löse Bezüge wie "er", "sie", "seine Frau", "dort" anhand der letzten Nachrichten auf.
 - Antworte immer knapp und freundlich, wie ein Assistent, der vorgelesen wird. Heutiges Datum: {{TODAY}}.`;
 
@@ -260,10 +276,11 @@ async function askClaude(text) {
       partner: Store.partnerOf(p.id) ? fullName(Store.partnerOf(p.id)) : null,
       eltern: Store.parentsOf(p.id).map(fullName),
       kinder: Store.childrenOf(p.id).map(fullName),
-      kategorien: Store.tagsOf(p.id).map(t => t.name),
+      kontext: contextLabel(p), // grobe Einordnung statt der Kategorienamen
       notizen: p.notes.map(n => ({ datum: n.date.slice(0, 10), text: n.text })),
     })),
-    kategorien: Store.allTags().map(t => t.name),
+    // Nur als Auswahlliste für add_tag/remove_tag — nicht als Info über Personen.
+    verfuegbareKategorien: Store.allTags().map(t => t.name),
     beziehungen: Store.db.relations.map(r => {
       const from = Store.get(r.fromId), to = Store.get(r.toId);
       return from && to ? `${fullName(from)} ist ${r.label} von ${fullName(to)}` : null;
