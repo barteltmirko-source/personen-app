@@ -242,9 +242,13 @@ Erlaubte Mutationen (in dieser Reihenfolge ausgeführt):
   (nur die Felder angeben, die geändert werden sollen; company = Firma, position = Berufsbezeichnung.
    Wenn jemand gestorben ist: deceased:true setzen, plus deathDate oder deathYear falls bekannt. deceased:false macht eine irrtümliche Eintragung rückgängig.)
 - {"op":"set_partner","a":"Name","b":"Name"}
+- {"op":"remove_partner","person":"Name"}  (löst die Partnerschaft auf beiden Seiten; beide Personen bleiben erhalten)
 - {"op":"add_parent_child","parent":"Name","child":"Name"}
+- {"op":"remove_parent_child","parent":"Name","child":"Name"}  (löst nur die Eltern-Kind-Verknüpfung, löscht keine Person)
 - {"op":"add_relation","from":"Name","label":"Opa","to":"Name"}
   (bedeutet: from ist <label> von to, z.B. "Peter ist Opa von Lena". Für beliebige Beziehungen: Oma, Opa, Onkel, Tante, Cousin, Nachbar, Chef, Freund, ...)
+- {"op":"remove_relation","from":"Name","label":"Opa","to":"Name"}
+  (entfernt genau diese freie Beziehung; "label" weglassen entfernt alle Beziehungen von from zu to. Richtung muss stimmen wie bei add_relation.)
 - {"op":"add_note","person":"Name","text":"..."}
 - {"op":"add_tag","person":"Name","tag":"Freunde"}
   (ordnet die Person einer Kategorie zu; existiert die Kategorie nicht, wird sie angelegt. Nutze bevorzugt vorhandene Kategorien aus der "verfuegbareKategorien"-Liste.)
@@ -255,6 +259,7 @@ Regeln:
 - "Name" ist immer ein Name, der die Person eindeutig identifiziert (bevorzugt "Vorname Nachname"). Bei neuen Personen exakt der Name aus create_person.
 - Wenn der Nutzer eine Familie beschreibt (z.B. "Max Mustermann, seine Frau Anna ist 40, Kinder Lena 8 und Tom 5"): lege alle Personen an, verknüpfe Partner, und trage BEIDE Elternteile für jedes Kind ein. Kinder erben den Nachnamen der Eltern, wenn nichts anderes gesagt wird.
 - Prüfe vorher in der Datenbank, ob eine Person schon existiert — dann kein create_person, sondern direkt verknüpfen/aktualisieren.
+- Falsche Verknüpfungen korrigierst du, indem du sie löst und neu setzt — NICHT über delete_person. "Anna ist nicht die Mutter von Tom, sondern seine Tante" wird also zu remove_parent_child + add_relation. delete_person nur, wenn der Nutzer die Person selbst loswerden will. Nenne in "reply" kurz, was gelöst wurde, damit der Nutzer die Korrektur nachvollziehen kann.
 - Bei reinen Fragen: beantworte sie aus der Datenbank in "reply", mutations bleibt []. Nutze auch Ableitungen: Großeltern = Eltern der Eltern, Geschwister = gleiche Eltern, Onkel/Tante über die "beziehungen"-Liste.
 - Bei Unklarheiten oder wenn eine Person nicht gefunden wird: erkläre das kurz in "reply", mutations bleibt [].
 - Alter: die Datenbank speichert Geburtsjahre/-daten. "ageYears" wird von der App automatisch in ein geschätztes Geburtsjahr umgerechnet.
@@ -356,15 +361,33 @@ function applyMutations(mutations) {
           changed = true;
           break;
         }
+        case "remove_partner": {
+          const p = mustFind(mut.person);
+          Store.removePartner(p.id);
+          changed = true;
+          break;
+        }
         case "add_parent_child": {
           const parent = mustFind(mut.parent), child = mustFind(mut.child);
           Store.addParentChild(parent.id, child.id);
           changed = true;
           break;
         }
+        case "remove_parent_child": {
+          const parent = mustFind(mut.parent), child = mustFind(mut.child);
+          Store.removeParentChild(parent.id, child.id);
+          changed = true;
+          break;
+        }
         case "add_relation": {
           const from = mustFind(mut.from), to = mustFind(mut.to);
           Store.addRelation(from.id, to.id, mut.label);
+          changed = true;
+          break;
+        }
+        case "remove_relation": {
+          const from = mustFind(mut.from), to = mustFind(mut.to);
+          Store.removeRelationBetween(from.id, to.id, mut.label);
           changed = true;
           break;
         }

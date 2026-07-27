@@ -264,9 +264,9 @@ function renderPersonDetail(id) {
 
         <h3>Familie & Beziehungen</h3>
         <div class="family">
-          ${partner ? linkRow("♥ Partner/in", partner) : `<div class="family-row muted">Kein Partner eingetragen</div>`}
-          ${parents.map(par => linkRow("↑ Elternteil", par)).join("")}
-          ${kids.map(k => linkRow("↓ Kind", k)).join("")}
+          ${partner ? linkRow("♥ Partner/in", partner, "partner") : `<div class="family-row muted">Kein Partner eingetragen</div>`}
+          ${parents.map(par => linkRow("↑ Elternteil", par, "parent")).join("")}
+          ${kids.map(k => linkRow("↓ Kind", k, "child")).join("")}
           ${grandparents.map(gp => linkRow("↑↑ Großeltern", gp)).join("")}
           ${grandchildren.map(gc => linkRow("↓↓ Enkel", gc)).join("")}
           ${outgoing.map(x => relRow(x.rel, `${esc(p.firstName)} ist ${esc(x.rel.label)} von`, x.other)).join("")}
@@ -299,10 +299,13 @@ function renderPersonDetail(id) {
       </div>
     </div>`;
 
-  function linkRow(label, person) {
+  // unlink: "partner" | "parent" | "child" — abgeleitete Zeilen (Großeltern, Enkel)
+  // bekommen kein ✕, die löst man über die Eltern-Kind-Verknüpfung dazwischen.
+  function linkRow(label, person, unlink = null) {
     return `<div class="family-row link" data-id="${person.id}">
       <span class="family-label">${label}</span>
       <span>${esc(fullName(person))} <span class="muted">(${esc(ageText(person))})</span></span>
+      ${unlink ? `<button class="rel-del" data-unlink="${unlink}" data-other="${person.id}" title="Verknüpfung lösen">✕</button>` : ""}
     </div>`;
   }
 
@@ -351,13 +354,31 @@ function renderPersonDetail(id) {
       renderPersonDetail(id);
     }));
 
-  view.querySelectorAll(".rel-del").forEach(btn =>
+  view.querySelectorAll(".rel-del[data-rel]").forEach(btn =>
     btn.addEventListener("click", e => {
       e.stopPropagation();
       if (confirm("Diese Beziehung löschen?")) {
         Store.removeRelation(btn.dataset.rel);
         renderPersonDetail(id);
       }
+    }));
+
+  view.querySelectorAll(".rel-del[data-unlink]").forEach(btn =>
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const other = Store.get(btn.dataset.other);
+      if (!other) return;
+      const kind = btn.dataset.unlink;
+      const frage = {
+        partner: `Partnerschaft von ${fullName(p)} und ${fullName(other)} lösen?`,
+        parent: `${fullName(other)} nicht mehr als Elternteil von ${fullName(p)} führen?`,
+        child: `${fullName(other)} nicht mehr als Kind von ${fullName(p)} führen?`,
+      }[kind];
+      if (!confirm(frage + "\n\nBeide Personen bleiben erhalten, nur die Verknüpfung geht weg.")) return;
+      if (kind === "partner") Store.removePartner(id);
+      else if (kind === "parent") Store.removeParentChild(other.id, id);
+      else Store.removeParentChild(id, other.id);
+      renderPersonDetail(id);
     }));
 
   document.getElementById("delete-person").addEventListener("click", () => {

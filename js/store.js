@@ -172,6 +172,14 @@ export const Store = {
     }
   },
 
+  removeParentChild(parentId, childId) {
+    const child = this.get(childId);
+    if (!child || !child.parentIds.includes(parentId)) return false;
+    child.parentIds = child.parentIds.filter(pid => pid !== parentId);
+    this.save();
+    return true;
+  },
+
   childrenOf(id) {
     return this.db.persons.filter(p => p.parentIds.includes(id));
   },
@@ -221,6 +229,18 @@ export const Store = {
   removeRelation(relId) {
     this.db.relations = this.db.relations.filter(r => r.id !== relId);
     this.save();
+  },
+
+  // Über Namen statt ID — für die Sprachbedienung. Ohne label fallen alle
+  // Beziehungen in dieser Richtung weg. Die Richtung wird nicht geraten.
+  removeRelationBetween(fromId, toId, label = null) {
+    const clean = (label || "").trim().toLowerCase();
+    const before = this.db.relations.length;
+    this.db.relations = this.db.relations.filter(r =>
+      !(r.fromId === fromId && r.toId === toId && (!clean || r.label.toLowerCase() === clean)));
+    if (this.db.relations.length === before) return false;
+    this.save();
+    return true;
   },
 
   // Beide Richtungen: outgoing = „Person ist X von …", incoming = „… ist X von Person"
