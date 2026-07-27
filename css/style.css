@@ -198,16 +198,70 @@ body {
   font-weight: 600;
 }
 
-.tag-line { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 7px; }
-.tag-badge {
-  font-size: 0.7rem;
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: var(--bg);
+/* Kategorie-Filter in der Personenliste: ein schmaler Knopf statt einer Chip-Reihe.
+   Bewusst nicht sticky — die Zeile scrollt mit der Liste weg. Das Menü liegt
+   absolut darüber, damit das Aufklappen die Liste nicht nach unten schiebt. */
+.filter-bar { position: relative; margin-bottom: 12px; }
+.filter-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
   border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
   color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
 }
-.tag-badge.unsorted { opacity: 0.65; font-style: italic; }
+.filter-btn.filtered { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.filter-caret { margin-left: auto; font-size: 0.7rem; transition: transform 0.15s; }
+.filter-btn.open .filter-caret { transform: rotate(180deg); }
+
+.tag-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  max-height: 52dvh;
+  overflow-y: auto;
+}
+.tag-menu[hidden] { display: none; }
+.tag-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.tag-menu-item:active { background: var(--bg); }
+.tag-menu-item input { flex: none; width: 18px; height: 18px; accent-color: var(--accent); }
+.tag-menu-name { flex: 1; }
+.tag-menu-count { font-size: 0.78rem; color: var(--muted); }
+.tag-menu-clear {
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
 
 .tag-admin { display: flex; flex-direction: column; gap: 6px; }
 .tag-admin-row {

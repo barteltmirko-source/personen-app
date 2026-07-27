@@ -111,21 +111,46 @@ function renderAssistant() {
 
 // ---------- Ansicht: Personen ----------
 
-let activeTagFilter = null; // merkt sich den gewählten Kategorie-Filter
+const activeTagFilters = new Set(); // gewählte Kategorien; leer = alle anzeigen
+
+function tagFilterLabel() {
+  if (activeTagFilters.size === 0) return "Alle Kategorien";
+  if (activeTagFilters.size === 1) {
+    const tag = Store.getTag([...activeTagFilters][0]);
+    if (tag) return tag.name;
+  }
+  return `${activeTagFilters.size} Kategorien`;
+}
 
 function renderPersons(detailId = null) {
   if (detailId) return renderPersonDetail(detailId);
 
   const tags = Store.allTags();
+  // Inzwischen gelöschte Kategorien aus dem Filter werfen
+  const validIds = new Set(tags.map(t => t.id));
+  for (const id of activeTagFilters) if (!validIds.has(id)) activeTagFilters.delete(id);
+
   view.innerHTML = `
     <div class="persons">
       <div class="toolbar">
         <input id="search" type="search" placeholder="Suchen …">
         <button id="add-person" class="btn primary">+ Neu</button>
       </div>
-      <div class="chip-row" id="tag-filter">
-        <button class="chip ${activeTagFilter === null ? "active" : ""}" data-tag="">Alle</button>
-        ${tags.map(t => `<button class="chip ${activeTagFilter === t.id ? "active" : ""}" data-tag="${t.id}">${esc(t.name)}</button>`).join("")}
+      <div class="filter-bar">
+        <button id="tag-menu-btn" class="filter-btn${activeTagFilters.size ? " filtered" : ""}"
+          aria-haspopup="true" aria-expanded="false">
+          <span id="tag-menu-label">${esc(tagFilterLabel())}</span>
+          <span class="filter-caret">▾</span>
+        </button>
+        <div id="tag-menu" class="tag-menu" hidden>
+          ${tags.map(t => `
+            <label class="tag-menu-item">
+              <input type="checkbox" data-tag="${t.id}" ${activeTagFilters.has(t.id) ? "checked" : ""}>
+              <span class="tag-menu-name">${esc(t.name)}</span>
+              <span class="tag-menu-count">${Store.personsWithTag(t.id).length}</span>
+            </label>`).join("")}
+          <button id="tag-menu-clear" class="tag-menu-clear">Alle anzeigen</button>
+        </div>
       </div>
       <div id="person-list" class="person-list"></div>
     </div>`;
@@ -135,9 +160,9 @@ function renderPersons(detailId = null) {
 
   function draw(filter = "") {
     let items = filter ? Store.findByName(filter) : Store.all();
-    if (activeTagFilter) items = items.filter(p => p.tagIds.includes(activeTagFilter));
+    if (activeTagFilters.size) items = items.filter(p => p.tagIds.some(id => activeTagFilters.has(id)));
     if (items.length === 0) {
-      list.innerHTML = `<div class="empty">${(filter || activeTagFilter) ? `Keine Treffer.` : `Noch keine Personen.<br>Lege die erste über „+ Neu“ oder den Assistenten an.`}</div>`;
+      list.innerHTML = `<div class="empty">${(filter || activeTagFilters.size) ? `Keine Treffer.` : `Noch keine Personen.<br>Lege die erste über „+ Neu“ oder den Assistenten an.`}</div>`;
       return;
     }
     list.innerHTML = items.map(p => {
@@ -150,11 +175,10 @@ function renderPersons(detailId = null) {
         kids.length ? kids.length + (kids.length === 1 ? " Kind" : " Kinder") : null,
         p.notes.length ? "📝 " + p.notes.length : null,
       ].filter(Boolean).join(" · ");
-      const personTags = Store.tagsOf(p.id);
+      // Kategorien stehen bewusst nicht auf der Karte — das spart je Person eine Zeile
       return `<div class="card person-card" data-id="${p.id}">
         <div class="person-name">${esc(fullName(p))}</div>
         <div class="person-sub">${esc(sub)}</div>
-        <div class="tag-line">${personTags.map(t => `<span class="tag-badge${t.id === UNSORTED_TAG_ID ? " unsorted" : ""}">${esc(t.name)}</span>`).join("")}</div>
       </div>`;
     }).join("");
     list.querySelectorAll(".person-card").forEach(card =>
@@ -165,14 +189,51 @@ function renderPersons(detailId = null) {
   search.addEventListener("input", () => draw(search.value.trim()));
   document.getElementById("add-person").addEventListener("click", () => openPersonForm(null));
 
-  view.querySelectorAll("#tag-filter .chip").forEach(chip =>
-    chip.addEventListener("click", () => {
-      activeTagFilter = chip.dataset.tag || null;
-      view.querySelectorAll("#tag-filter .chip").forEach(c =>
-        c.classList.toggle("active", (c.dataset.tag || null) === activeTagFilter));
-      draw(search.value.trim());
+  const menu = document.getElementById("tag-menu");
+  const menuBtn = document.getElementById("tag-menu-btn");
+
+  function refreshFilter() {
+    document.getElementById("tag-menu-label").textContent = tagFilterLabel();
+    menuBtn.classList.toggle("filtered", activeTagFilters.size > 0);
+    draw(search.value.trim());
+  }
+
+  menuBtn.addEventListener("click", () => {
+    const open = menu.hidden;
+    menu.hidden = !open;
+    menuBtn.setAttribute("aria-expanded", String(open));
+    menuBtn.classList.toggle("open", open);
+  });
+
+  menu.querySelectorAll('input[type="checkbox"]').forEach(cb =>
+    cb.addEventListener("change", () => {
+      if (cb.checked) activeTagFilters.add(cb.dataset.tag);
+      else activeTagFilters.delete(cb.dataset.tag);
+      refreshFilter();
     }));
+
+  document.getElementById("tag-menu-clear").addEventListener("click", () => {
+    activeTagFilters.clear();
+    menu.querySelectorAll('input[type="checkbox"]').forEach(cb => (cb.checked = false));
+    refreshFilter();
+    closeTagMenu();
+  });
 }
+
+// Einmalig registriert: das Filtermenü schließt bei Klick daneben oder mit Escape.
+// (renderPersons ersetzt das DOM, deshalb hier keine Listener pro Aufruf anhängen.)
+function closeTagMenu() {
+  const menu = document.getElementById("tag-menu");
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  const btn = document.getElementById("tag-menu-btn");
+  if (btn) { btn.setAttribute("aria-expanded", "false"); btn.classList.remove("open"); }
+}
+
+document.addEventListener("click", e => {
+  if (!e.target.closest("#tag-menu") && !e.target.closest("#tag-menu-btn")) closeTagMenu();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeTagMenu(); });
 
 function renderPersonDetail(id) {
   const p = Store.get(id);
