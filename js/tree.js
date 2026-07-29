@@ -10,9 +10,11 @@
 // erscheint mehrfach — Zweitkästchen sind als Dublette (↗) gekennzeichnet.
 "use strict";
 
-import { Store, ageText, fullName } from "./store.js";
+import { Store, ageOf, fullName } from "./store.js";
 
-const NODE_W = 142, NODE_H = 54;
+// Zwei Textzeilen unter dem Namen (Lebensdaten + Alter) brauchen etwas mehr
+// Kasten als die eine Zeile davor.
+const NODE_W = 158, NODE_H = 60;
 const H_GAP = 30, PAIR_GAP = 14, V_GAP = 82;
 const MARGIN = 26;
 
@@ -254,6 +256,30 @@ function esc(s) {
 
 const shorten = (s, max) => (s.length > max ? s.slice(0, max - 1) + "…" : s);
 
+const deDate = iso => new Date(iso + "T00:00:00").toLocaleDateString("de-DE");
+
+// Zwei Zeilen unter dem Namen: erst die Lebensdaten, dann das Alter.
+// Ist nur ein Jahr bekannt, steht das Jahr da; ist gar nichts bekannt,
+// entfällt die Datumszeile und der Kasten zeigt nur eine Unterzeile.
+function lifeLines(person) {
+  const b = person.birth, d = person.death;
+  // Ein aus dem Alter zurückgerechnetes Jahr ist geraten — das muss man sehen.
+  const birth = b?.date ? deDate(b.date)
+    : b?.year ? (b.estimated ? "ca. " : "") + b.year
+    : null;
+  const a = ageOf(person);
+  const years = a ? `${a.estimated ? "ca. " : ""}${a.years} Jahre` : null;
+
+  if (d) {
+    const death = d.date ? deDate(d.date) : (d.year ? String(d.year) : null);
+    return [
+      birth && death ? `* ${birth} † ${death}` : death ? `† ${death}` : birth ? `* ${birth}` : null,
+      years ? `wurde ${years}` : "verstorben",
+    ];
+  }
+  return [birth ? `* ${birth}` : null, years || "Alter unbekannt"];
+}
+
 function nodeSvg(person, x, y, opts = {}) {
   const cls = ["tree-node"];
   if (opts.root) cls.push("is-root");
@@ -266,11 +292,15 @@ function nodeSvg(person, x, y, opts = {}) {
   const dup = opts.duplicate
     ? `<text class="tree-dup" x="${x + NODE_W / 2 - 9}" y="${y + 15}" text-anchor="middle">↗</text>`
     : "";
+  const subs = lifeLines(person).filter(Boolean);
+  const subText = subs.map((line, i) =>
+    `<text class="tree-sub" x="${x}" y="${y + (subs.length === 1 ? 40 : 35 + i * 14)}" text-anchor="middle">${esc(shorten(line, 25))}</text>`
+  ).join("");
   return `<g class="${cls.join(" ")}" data-id="${person.id}">
     ${label}
     <rect x="${x - NODE_W / 2}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="11"/>
-    <text class="tree-name" x="${x}" y="${y + 22}" text-anchor="middle">${esc(shorten(fullName(person), 19))}</text>
-    <text class="tree-sub" x="${x}" y="${y + 39}" text-anchor="middle">${esc(shorten(ageText(person), 24))}</text>
+    <text class="tree-name" x="${x}" y="${y + 19}" text-anchor="middle">${esc(shorten(fullName(person), 21))}</text>
+    ${subText}
     ${dup}
   </g>`;
 }
