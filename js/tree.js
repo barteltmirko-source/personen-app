@@ -266,6 +266,7 @@ function lifeLines(person) {
   // Ein aus dem Alter zurückgerechnetes Jahr ist geraten — das muss man sehen.
   const birth = b?.date ? deDate(b.date)
     : b?.year ? (b.estimated ? "ca. " : "") + b.year
+    : (b?.day && b?.month) ? `${b.day}.${b.month}.` // Tag und Monat ohne Jahr
     : null;
   const a = ageOf(person);
   const years = a ? `${a.estimated ? "ca. " : ""}${a.years} Jahre` : null;

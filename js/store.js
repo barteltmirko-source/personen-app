@@ -72,8 +72,8 @@ export const Store = {
 
   newId() { return "p_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); },
 
-  createPerson({ firstName, lastName = "", birthDate = null, birthYear = null, ageYears = null, estimated = false, company = "", position = "", deceased = false, deathDate = null, deathYear = null }) {
-    const birth = normalizeBirth({ birthDate, birthYear, ageYears, estimated });
+  createPerson({ firstName, lastName = "", birthDate = null, birthYear = null, ageYears = null, estimated = false, birthDayMonth = null, company = "", position = "", deceased = false, deathDate = null, deathYear = null }) {
+    const birth = normalizeBirth({ birthDate, birthYear, ageYears, estimated, birthDayMonth });
     const p = {
       id: this.newId(),
       firstName: (firstName || "").trim(),
@@ -103,12 +103,14 @@ export const Store = {
     if (fields.lastName !== undefined) p.lastName = fields.lastName.trim();
     if (fields.company !== undefined) p.company = (fields.company || "").trim();
     if (fields.position !== undefined) p.position = (fields.position || "").trim();
-    if (fields.birthDate !== undefined || fields.birthYear !== undefined || fields.ageYears !== undefined) {
+    if (fields.birthDate !== undefined || fields.birthYear !== undefined ||
+        fields.ageYears !== undefined || fields.birthDayMonth !== undefined) {
       p.birth = normalizeBirth({
         birthDate: fields.birthDate ?? null,
         birthYear: fields.birthYear ?? null,
         ageYears: fields.ageYears ?? null,
         estimated: fields.estimated ?? false,
+        birthDayMonth: fields.birthDayMonth ?? null,
       }) || p.birth;
     }
     if (fields.deceased !== undefined || fields.deathDate !== undefined || fields.deathYear !== undefined) {
@@ -416,12 +418,36 @@ function normTag(s) {
   return norm(s).replace(/[.\-,]/g, "").replace(/\s+/g, " ").trim();
 }
 
+// „12.3." / „12.03." / „12/3" → { day, month }; sonst null.
+// Weist auch Tage ab, die es im Monat nicht gibt (31. Februar).
+export function parseDayMonth(text) {
+  const m = String(text || "").trim().match(/^(\d{1,2})\s*[./-]\s*(\d{1,2})\.?$/);
+  if (!m) return null;
+  const day = Number(m[1]), month = Number(m[2]);
+  if (day < 1 || month < 1 || month > 12) return null;
+  const probe = new Date(2024, month - 1, day); // Schaltjahr, damit der 29.2. gilt
+  return probe.getMonth() === month - 1 ? { day, month } : null;
+}
+
+const pad = n => String(n).padStart(2, "0");
+
 // birth: { date: "YYYY-MM-DD"|null, year: number|null, estimated: bool, capturedAt?: "YYYY-MM-DD" }
+//   plus optional { day, month }, wenn nur Tag und Monat bekannt sind — dann
+//   bleiben date und year null und die Person hat kein ermittelbares Alter.
 // capturedAt = Tag, an dem ein reines Alter erfasst wurde → erlaubt genauere Schätzung.
-function normalizeBirth({ birthDate, birthYear, ageYears, estimated }) {
+function normalizeBirth({ birthDate, birthYear, ageYears, estimated, birthDayMonth }) {
   if (birthDate) {
     const d = String(birthDate).slice(0, 10);
     if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return { date: d, year: Number(d.slice(0, 4)), estimated: false };
+  }
+  const dm = birthDayMonth ? parseDayMonth(birthDayMonth) : null;
+  if (dm) {
+    // Tag/Monat plus bekanntes Jahr ergibt zusammen ein volles Datum
+    const y = Number(birthYear);
+    if (y > 1880 && y <= new Date().getFullYear()) {
+      return { date: `${y}-${pad(dm.month)}-${pad(dm.day)}`, year: y, estimated: false };
+    }
+    return { date: null, year: null, day: dm.day, month: dm.month, estimated: false };
   }
   if (birthYear) {
     const y = Number(birthYear);
@@ -523,19 +549,30 @@ export function fullName(p) {
 
 // ---------- Geburtstage ----------
 
+// Tag und Monat eines Geburtstags — egal ob aus vollem Datum oder ohne Jahr
+export function birthDayMonthOf(person) {
+  const b = person.birth;
+  if (!b) return null;
+  if (b.date) {
+    const [, m, d] = b.date.split("-").map(Number);
+    return { day: d, month: m };
+  }
+  return b.day && b.month ? { day: b.day, month: b.month } : null;
+}
+
 // Ein Geburtstag braucht Tag und Monat — ein bloßes Geburtsjahr reicht nicht.
 // Verstorbene tauchen nicht auf.
 export function hasBirthday(person) {
-  return !!person.birth?.date && !person.death;
+  return !!birthDayMonthOf(person) && !person.death;
 }
 
 // 29. Februar rollt in Nicht-Schaltjahren automatisch auf den 1. März.
 export function nextBirthday(person, from = new Date()) {
-  if (!hasBirthday(person)) return null;
-  const [, m, d] = person.birth.date.split("-").map(Number);
+  const dm = hasBirthday(person) ? birthDayMonthOf(person) : null;
+  if (!dm) return null;
   const today = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-  const next = new Date(today.getFullYear(), m - 1, d);
-  return next < today ? new Date(today.getFullYear() + 1, m - 1, d) : next;
+  const next = new Date(today.getFullYear(), dm.month - 1, dm.day);
+  return next < today ? new Date(today.getFullYear() + 1, dm.month - 1, dm.day) : next;
 }
 
 export function daysUntilBirthday(person, from = new Date()) {

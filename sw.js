@@ -1,5 +1,5 @@
 // Service Worker — App-Dateien für schnellen Start zwischenspeichern
-const CACHE = "pg-v2";
+const CACHE = "pg-v3";
 const SHELL = [
   ".",
   "index.html",
@@ -11,6 +11,7 @@ const SHELL = [
   "js/drive.js",
   "js/google.js",
   "js/calendar.js",
+  "js/ics.js",
   "js/speech.js",
   "manifest.webmanifest",
   "icons/icon-192.png",

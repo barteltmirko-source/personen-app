@@ -19,7 +19,7 @@
 // Berechtigung auf die gesamte Kalenderliste kosten — zu viel für Kosmetik.
 "use strict";
 
-import { Store, Settings, fullName, hasBirthday } from "./store.js";
+import { Store, Settings, fullName, hasBirthday, birthDayMonthOf } from "./store.js";
 import { SCOPE_CALENDAR, getToken, api } from "./google.js";
 
 const enc = encodeURIComponent;
@@ -43,7 +43,10 @@ function reminderMinutes(leadDays) {
 }
 
 function eventBody(person) {
-  const [y, m, d] = person.birth.date.split("-").map(Number);
+  const { day: d, month: m } = birthDayMonthOf(person);
+  // Ist kein Geburtsjahr bekannt, ist das Startjahr der Serie beliebig — die
+  // jährliche Wiederholung trifft den Tag trotzdem.
+  const y = person.birth.year || new Date().getFullYear();
   return {
     summary: `🎂 ${fullName(person)}`,
     description: "Angelegt von der App „Personen-Gedächtnis“.",

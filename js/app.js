@@ -3,8 +3,9 @@
 
 import {
   Store, Settings, ageText, fullName, UNSORTED_TAG_ID,
-  hasBirthday, nextBirthday, daysUntilBirthday, ageOnNextBirthday,
+  hasBirthday, nextBirthday, daysUntilBirthday, ageOnNextBirthday, parseDayMonth,
 } from "./store.js";
+import { parseIcs, nameFromSummary } from "./ics.js";
 import { renderFamilySvg } from "./tree.js";
 import { handleInput } from "./nlu.js";
 import { Drive } from "./drive.js";
@@ -369,15 +370,19 @@ function renderPersonDetail(id) {
           <h2>${esc(fullName(p))}</h2>
           <button id="edit" class="btn small">Bearbeiten</button>
         </div>
-        <div class="detail-age">${esc(ageText(p))}${p.birth?.date ? " · geb. " + new Date(p.birth.date + "T00:00:00").toLocaleDateString("de-DE") : (p.birth?.year ? " · Jahrgang " + p.birth.year : "")}</div>
+        <div class="detail-age">${esc(ageText(p))}${
+          p.birth?.date ? " · geb. " + new Date(p.birth.date + "T00:00:00").toLocaleDateString("de-DE")
+          : p.birth?.year ? " · Jahrgang " + p.birth.year
+          : (p.birth?.day && p.birth?.month) ? ` · Geburtstag am ${p.birth.day}.${p.birth.month}.`
+          : ""}</div>
         ${work ? `<div class="detail-age">💼 ${esc(work)}</div>` : ""}
-        ${(p.birth?.date || p.birthdayReminder) ? `
+        ${(hasBirthday(p) || p.birthdayReminder) ? `
           <label class="toggle-row bday-toggle">
             <input type="checkbox" id="d-bday" ${p.birthdayReminder ? "checked" : ""}>
             🎂 An den Geburtstag erinnern
           </label>
-          ${p.birthdayReminder && !p.birth?.date
-            ? `<div class="muted small-text">Dafür fehlt noch ein vollständiges Geburtsdatum.</div>` : ""}` : ""}
+          ${p.birthdayReminder && !hasBirthday(p)
+            ? `<div class="muted small-text">Dafür fehlen noch Tag und Monat der Geburt.</div>` : ""}` : ""}
 
         <h3>Kategorien</h3>
         <div class="chip-row" id="detail-tags">
@@ -591,6 +596,8 @@ function openPersonForm(person) {
         <label>Vorname<input id="f-first" value="${esc(person?.firstName || "")}"></label>
         <label>Nachname<input id="f-last" value="${esc(person?.lastName || "")}"></label>
         <label>Geburtsdatum (falls bekannt)<input id="f-date" type="date" value="${b?.date || ""}"></label>
+        <label>… oder nur Tag und Monat<input id="f-daymonth" placeholder="z. B. 12.03."
+          value="${(b?.day && b?.month) ? `${b.day}.${b.month}.` : ""}"></label>
         <div class="form-row">
           <label>… oder Geburtsjahr<input id="f-year" type="number" placeholder="z. B. 1984" value="${(!b?.date && b?.year) ? b.year : ""}"></label>
           <label>… oder Alter<input id="f-age" type="number" placeholder="z. B. 42"></label>
@@ -632,10 +639,16 @@ function openPersonForm(person) {
   document.getElementById("f-save").addEventListener("click", () => {
     const firstName = document.getElementById("f-first").value.trim();
     if (!firstName) { alert("Bitte mindestens einen Vornamen angeben."); return; }
+    const dayMonthRaw = document.getElementById("f-daymonth").value.trim();
+    if (dayMonthRaw && !parseDayMonth(dayMonthRaw)) {
+      alert("Tag und Monat bitte als „12.03.“ angeben.");
+      return;
+    }
     const fields = {
       firstName,
       lastName: document.getElementById("f-last").value.trim(),
       birthDate: document.getElementById("f-date").value || null,
+      birthDayMonth: dayMonthRaw || null,
       birthYear: document.getElementById("f-year").value || null,
       ageYears: document.getElementById("f-age").value || null,
       company: document.getElementById("f-company").value.trim(),
@@ -801,6 +814,30 @@ function renderSettings() {
       </div>
 
       <div class="card">
+        <h3>Geburtstage aus Kalender importieren</h3>
+        <p class="muted small-text">Liest Termine aus einer Kalenderdatei (.ics) und legt daraus Personen an. In Google Kalender bekommst du sie über Einstellungen → Import/Export → Exportieren; das ist ein ZIP, das du erst entpacken musst.</p>
+        <p class="muted small-text">Der Termintitel wird unverändert übernommen: erstes Wort als Vorname, alles Weitere als Nachname. Aus „Anna Schmidt Geburtstag“ wird also der Nachname „Schmidt Geburtstag“ — nachbessern kannst du das auf der Personenseite.</p>
+        <label>Kategorie für die importierten Personen (Pflicht)
+          <select id="imp-tag">
+            <option value="">— bitte wählen —</option>
+            ${Store.allTags().map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}
+            <option value="__new__">➕ Neue Kategorie …</option>
+          </select></label>
+        <label id="imp-newtag-row" hidden>Name der neuen Kategorie
+          <input id="imp-newtag" placeholder="z. B. Doka"></label>
+        <label class="toggle-row">
+          <input type="checkbox" id="imp-year">
+          Das Jahr in dieser Datei ist das echte Geburtsjahr
+        </label>
+        <p class="muted small-text">Bei Googles Kontakte-Geburtstagen zutrifft das meist. Bei einem selbst gepflegten Kalender ist das Jahr oft nur das Jahr, in dem du den Termin angelegt hast — dann lass das Häkchen weg, es werden nur Tag und Monat übernommen.</p>
+        <div class="settings-row">
+          <button id="imp-file" class="btn primary" disabled>.ics-Datei wählen</button>
+          <input id="imp-input" type="file" accept=".ics,text/calendar" multiple hidden>
+          <span id="imp-status" class="muted small-text">Bitte zuerst eine Kategorie wählen.</span>
+        </div>
+      </div>
+
+      <div class="card">
         <h3>Datensicherung</h3>
         <div class="settings-row">
           <button id="s-export" class="btn ghost">Daten exportieren</button>
@@ -882,6 +919,75 @@ function renderSettings() {
     Settings.set("googleClientId", document.getElementById("s-gcid").value.trim());
     if (!Settings.data.googleClientId) { alert("Bitte zuerst die Google Client-ID eintragen."); return; }
     await Drive.connect(true);
+  });
+
+  // ---- Import aus Kalenderdatei ----
+  const impTag = document.getElementById("imp-tag");
+  const impNewRow = document.getElementById("imp-newtag-row");
+  const impNew = document.getElementById("imp-newtag");
+  const impFile = document.getElementById("imp-file");
+  const impInput = document.getElementById("imp-input");
+  const impStatus = document.getElementById("imp-status");
+
+  // Ohne Kategorie wird nicht importiert — der Knopf bleibt gesperrt, damit
+  // niemand erst eine Datei aussucht und dann abgewiesen wird.
+  function chosenTagName() {
+    if (impTag.value === "__new__") return impNew.value.trim();
+    if (!impTag.value) return "";
+    return Store.getTag(impTag.value)?.name || "";
+  }
+  function refreshImportState() {
+    impNewRow.hidden = impTag.value !== "__new__";
+    const ok = chosenTagName().length > 0;
+    impFile.disabled = !ok;
+    if (!ok) {
+      impStatus.textContent = impTag.value === "__new__"
+        ? "Bitte einen Namen für die neue Kategorie eingeben."
+        : "Bitte zuerst eine Kategorie wählen.";
+    } else {
+      impStatus.textContent = `Importierte Personen kommen nach „${chosenTagName()}“.`;
+    }
+  }
+  impTag.addEventListener("change", refreshImportState);
+  impNew.addEventListener("input", refreshImportState);
+  refreshImportState();
+
+  impFile.addEventListener("click", () => impInput.click());
+  impInput.addEventListener("change", async () => {
+    const files = [...impInput.files];
+    impInput.value = ""; // damit dieselbe Datei erneut gewählt werden kann
+    if (!files.length) return;
+
+    const name = chosenTagName();
+    if (!name) return;
+    const tag = Store.findTagByName(name) || Store.createTag(name);
+    if (!tag) { impStatus.textContent = "Die Kategorie konnte nicht angelegt werden."; return; }
+    const nimmJahr = document.getElementById("imp-year").checked;
+
+    let angelegt = 0, uebersprungen = 0;
+    try {
+      for (const file of files) {
+        for (const ev of parseIcs(await file.text())) {
+          const { firstName, lastName } = nameFromSummary(ev.summary);
+          if (!firstName) { uebersprungen++; continue; }
+          const p = Store.createPerson({
+            firstName, lastName,
+            ...(nimmJahr
+              ? { birthDate: `${ev.year}-${String(ev.month).padStart(2, "0")}-${String(ev.day).padStart(2, "0")}` }
+              : { birthDayMonth: `${ev.day}.${ev.month}.` }),
+          });
+          Store.addTagToPerson(p.id, tag.id);
+          angelegt++;
+        }
+      }
+    } catch (e) {
+      impStatus.textContent = "Datei konnte nicht gelesen werden: " + e.message;
+      return;
+    }
+    renderSettings();
+    document.getElementById("imp-status").textContent =
+      `${angelegt} ${angelegt === 1 ? "Person" : "Personen"} nach „${tag.name}“ importiert` +
+      (uebersprungen ? ` · ${uebersprungen} ohne verwertbaren Namen übersprungen` : "");
   });
 
   document.getElementById("s-export").addEventListener("click", () => {

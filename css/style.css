@@ -502,6 +502,18 @@ body {
   color: var(--text);
 }
 .settings-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.settings select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  background: var(--bg);
+  color: var(--text);
+}
+.btn[disabled] { opacity: 0.45; cursor: not-allowed; }
 .toggle-row {
   display: flex !important;
   align-items: center;
