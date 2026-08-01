@@ -790,8 +790,9 @@ function renderSettings() {
           : "Der Kalender wird beim ersten Abgleich angelegt."}</p>
         <div class="settings-row">
           <button id="s-cal-sync" class="btn primary">Jetzt abgleichen</button>
-          <span id="cal-status" class="muted">${Calendar.pending()} ${Calendar.pending() === 1 ? "Erinnerung" : "Erinnerungen"} aktiv</span>
+          <button id="s-cal-reauth" class="btn ghost small">Zugriff neu erteilen</button>
         </div>
+        <p id="cal-status" class="muted small-text">${Calendar.pending()} ${Calendar.pending() === 1 ? "Erinnerung" : "Erinnerungen"} aktiv</p>
       </div>
 
       <div class="card">
@@ -833,20 +834,23 @@ function renderSettings() {
     e.target.value = days;
     Settings.set("calendarLeadDays", days);
   });
-  document.getElementById("s-cal-sync").addEventListener("click", async () => {
+  async function runCalendarSync(forceConsent) {
     const status = document.getElementById("cal-status");
     Settings.set("googleClientId", document.getElementById("s-gcid").value.trim());
     if (!Settings.data.googleClientId) { alert("Bitte zuerst die Google Client-ID eintragen."); return; }
-    status.textContent = "Gleiche ab …";
+    status.textContent = forceConsent ? "Frage Zugriff neu an …" : "Gleiche ab …";
     try {
-      const r = await Calendar.sync(true);
+      const r = await Calendar.sync(true, forceConsent);
       Settings.set("calendarEnabled", true);
       status.textContent = `${r.angelegt} neu · ${r.aktualisiert} aktualisiert · ${r.entfernt} entfernt`;
       renderSettings(); // Kalendername/-status in der Ansicht nachziehen
     } catch (e) {
       status.textContent = "Fehler: " + e.message;
     }
-  });
+  }
+
+  document.getElementById("s-cal-sync").addEventListener("click", () => runCalendarSync(false));
+  document.getElementById("s-cal-reauth").addEventListener("click", () => runCalendarSync(true));
 
   const newTagInput = document.getElementById("new-tag");
   document.getElementById("add-tag").addEventListener("click", () => {

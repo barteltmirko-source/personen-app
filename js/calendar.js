@@ -149,9 +149,9 @@ export const Calendar = {
     }
   },
 
-  async sync(interactive = false) {
+  async sync(interactive = false, forceConsent = false) {
     if (!this.configured()) throw new Error("Keine Google Client-ID hinterlegt");
-    await getToken(SCOPE_CALENDAR, interactive);
+    await getToken(SCOPE_CALENDAR, interactive || forceConsent, forceConsent);
     const calId = await this.ensureCalendar();
     const events = `${calPath(calId)}/events`;
 
