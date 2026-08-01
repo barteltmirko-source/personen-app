@@ -253,6 +253,8 @@ Erlaubte Mutationen (in dieser Reihenfolge ausgeführt):
 - {"op":"add_tag","person":"Name","tag":"Freunde"}
   (ordnet die Person einer Kategorie zu; existiert die Kategorie nicht, wird sie angelegt. Nutze bevorzugt vorhandene Kategorien aus der "verfuegbareKategorien"-Liste.)
 - {"op":"remove_tag","person":"Name","tag":"Freunde"}
+- {"op":"set_birthday_reminder","person":"Name","on":true|false}
+  (schaltet die Geburtstags-Erinnerung an oder aus. Braucht ein volles Geburtsdatum — sag es dazu, wenn nur ein Geburtsjahr bekannt ist.)
 - {"op":"delete_person","person":"Name"}  (nur wenn der Nutzer das ausdrücklich verlangt)
 
 Regeln:
@@ -282,6 +284,7 @@ async function askClaude(text) {
       eltern: Store.parentsOf(p.id).map(fullName),
       kinder: Store.childrenOf(p.id).map(fullName),
       kontext: contextLabel(p), // grobe Einordnung statt der Kategorienamen
+      geburtstagsErinnerung: p.birthdayReminder,
       notizen: p.notes.map(n => ({ datum: n.date.slice(0, 10), text: n.text })),
     })),
     // Nur als Auswahlliste für add_tag/remove_tag — nicht als Info über Personen.
@@ -401,6 +404,12 @@ function applyMutations(mutations) {
           const p = mustFind(mut.person);
           const tag = Store.findTagByName(mut.tag) || Store.createTag(mut.tag);
           if (tag) { Store.addTagToPerson(p.id, tag.id); changed = true; }
+          break;
+        }
+        case "set_birthday_reminder": {
+          const p = mustFind(mut.person);
+          Store.setBirthdayReminder(p.id, mut.on !== false);
+          changed = true;
           break;
         }
         case "remove_tag": {

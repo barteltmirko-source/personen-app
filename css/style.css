@@ -289,6 +289,30 @@ body {
   margin-top: 0;
 }
 
+/* ---------- Geburtstage ---------- */
+.bday-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+.bday-card:active { border-color: var(--accent); }
+.bday-card.today { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
+.bday-main { flex: 1; min-width: 0; }
+.bday-bell {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 999px;
+  padding: 7px 11px;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.5;
+}
+.bday-bell.on { opacity: 1; border-color: var(--accent); background: var(--card); }
+.bday-toggle { margin: 4px 0 12px; }
+
 /* ---------- Detail ---------- */
 .detail-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .detail-head h2 { font-size: 1.3rem; }

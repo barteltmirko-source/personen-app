@@ -44,6 +44,8 @@ export const Store = {
       if (p.company === undefined) { p.company = ""; touched = true; }
       if (p.position === undefined) { p.position = ""; touched = true; }
       if (p.death === undefined) { p.death = null; touched = true; }
+      if (p.birthdayReminder === undefined) { p.birthdayReminder = false; touched = true; }
+      if (p.calendarEventId === undefined) { p.calendarEventId = null; touched = true; }
       if (!Array.isArray(p.tagIds)) { p.tagIds = []; touched = true; }
       const cleaned = p.tagIds.filter(id => validTagIds.has(id));
       if (cleaned.length !== p.tagIds.length) { p.tagIds = cleaned; touched = true; }
@@ -84,6 +86,8 @@ export const Store = {
       partnerId: null,
       parentIds: [],
       notes: [],
+      birthdayReminder: false,
+      calendarEventId: null, // von der App angelegter Google-Kalender-Termin
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -332,6 +336,34 @@ export const Store = {
     return this.all().filter(p => p.tagIds.includes(tagId));
   },
 
+  // ---------- Geburtstags-Erinnerung ----------
+
+  setBirthdayReminder(id, on) {
+    const p = this.get(id);
+    if (!p || p.birthdayReminder === !!on) return false;
+    p.birthdayReminder = !!on;
+    p.updatedAt = new Date().toISOString();
+    this.save();
+    return true;
+  },
+
+  // Merkt sich den Termin, den die App im Kalender angelegt hat. Kein markDirty:
+  // das ist Buchhaltung der Synchronisation, keine inhaltliche Änderung.
+  setCalendarEventId(id, eventId) {
+    const p = this.get(id);
+    if (!p || p.calendarEventId === eventId) return;
+    p.calendarEventId = eventId;
+    this.save(false);
+  },
+
+  // Alle, die einen echten Geburtstag haben — nach Tagen bis dahin sortiert
+  upcomingBirthdays(from = new Date()) {
+    return this.db.persons
+      .filter(hasBirthday)
+      .map(p => ({ person: p, days: daysUntilBirthday(p, from), date: nextBirthday(p, from) }))
+      .sort((a, b) => a.days - b.days || fullName(a.person).localeCompare(fullName(b.person), "de"));
+  },
+
   // ---------- Notizen ----------
 
   addNote(personId, text) {
@@ -489,6 +521,36 @@ export function fullName(p) {
   return [p.firstName, p.lastName].filter(Boolean).join(" ");
 }
 
+// ---------- Geburtstage ----------
+
+// Ein Geburtstag braucht Tag und Monat — ein bloßes Geburtsjahr reicht nicht.
+// Verstorbene tauchen nicht auf.
+export function hasBirthday(person) {
+  return !!person.birth?.date && !person.death;
+}
+
+// 29. Februar rollt in Nicht-Schaltjahren automatisch auf den 1. März.
+export function nextBirthday(person, from = new Date()) {
+  if (!hasBirthday(person)) return null;
+  const [, m, d] = person.birth.date.split("-").map(Number);
+  const today = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  const next = new Date(today.getFullYear(), m - 1, d);
+  return next < today ? new Date(today.getFullYear() + 1, m - 1, d) : next;
+}
+
+export function daysUntilBirthday(person, from = new Date()) {
+  const next = nextBirthday(person, from);
+  if (!next) return null;
+  const today = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  return Math.round((next - today) / 86400000);
+}
+
+// Welches Alter die Person am nächsten Geburtstag erreicht
+export function ageOnNextBirthday(person, from = new Date()) {
+  const next = nextBirthday(person, from);
+  return next && person.birth?.year ? next.getFullYear() - person.birth.year : null;
+}
+
 // ---------- Privat/Geschäftlich ----------
 
 // Kategorien sind eine reine Ordnungshilfe und werden nie als Eigenschaft einer
@@ -521,7 +583,11 @@ export function contextLabel(person) {
 // ---------- Einstellungen ----------
 
 export const Settings = {
-  data: { googleClientId: "", anthropicKey: "", ttsEnabled: true, driveFileId: "" },
+  data: {
+    googleClientId: "", anthropicKey: "", ttsEnabled: true, driveFileId: "",
+    calendarEnabled: false, // Geburtstage in den Google Kalender schreiben
+    calendarLeadDays: 1,    // wie viele Tage vorher erinnert wird (0 = am Tag selbst)
+  },
   load() {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);

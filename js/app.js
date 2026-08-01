@@ -1,10 +1,14 @@
 // app.js — Oberfläche und Navigation
 "use strict";
 
-import { Store, Settings, ageText, fullName, UNSORTED_TAG_ID } from "./store.js";
+import {
+  Store, Settings, ageText, fullName, UNSORTED_TAG_ID,
+  hasBirthday, nextBirthday, daysUntilBirthday, ageOnNextBirthday,
+} from "./store.js";
 import { renderFamilySvg } from "./tree.js";
 import { handleInput } from "./nlu.js";
 import { Drive } from "./drive.js";
+import { Calendar } from "./calendar.js";
 import { speak, stopSpeaking } from "./speech.js";
 
 Store.load();
@@ -34,10 +38,14 @@ function render() {
   stopSpeaking();
   if (currentTab === "assistant") renderAssistant();
   else if (currentTab === "persons") renderPersons();
+  else if (currentTab === "birthdays") renderBirthdays();
   else if (currentTab === "settings") renderSettings();
 }
 
-Store.onChange(() => { if (currentTab === "persons") renderPersons(); });
+Store.onChange(() => {
+  if (currentTab === "persons") renderPersons();
+  else if (currentTab === "birthdays") renderBirthdays();
+});
 
 // ---------- Drive-Status ----------
 
@@ -47,6 +55,12 @@ Drive.onStatus((status, detail) => {
   syncStatus.title = "Google Drive: " + status + (detail ? " — " + detail : "");
   const el = document.getElementById("drive-status-text");
   if (el) el.textContent = statusText(status, detail);
+});
+
+// Fehler beim automatischen Kalender-Abgleich sollen nicht still verschwinden
+Calendar.onStatus((status, detail) => {
+  const el = document.getElementById("cal-status");
+  if (el) el.textContent = status === "fehler" ? "Fehler: " + detail : detail || "Abgeglichen";
 });
 
 function statusText(status, detail) {
@@ -113,22 +127,78 @@ function renderAssistant() {
 
 const activeTagFilters = new Set(); // gewählte Kategorien; leer = alle anzeigen
 
-function tagFilterLabel() {
-  if (activeTagFilters.size === 0) return "Alle Kategorien";
-  if (activeTagFilters.size === 1) {
-    const tag = Store.getTag([...activeTagFilters][0]);
+function tagFilterLabel(selected) {
+  if (selected.size === 0) return "Alle Kategorien";
+  if (selected.size === 1) {
+    const tag = Store.getTag([...selected][0]);
     if (tag) return tag.name;
   }
-  return `${activeTagFilters.size} Kategorien`;
+  return `${selected.size} Kategorien`;
 }
+
+// Kategorie-Filter als kompaktes Dropdown. Personen- und Geburtstagsliste
+// nutzen dieselbe Leiste mit je eigener Auswahl; es ist immer nur eine
+// Ansicht im DOM, deshalb dürfen sich die IDs wiederholen.
+function tagFilterMarkup(selected) {
+  const tags = Store.allTags();
+  const validIds = new Set(tags.map(t => t.id));
+  for (const id of selected) if (!validIds.has(id)) selected.delete(id);
+  return `
+    <div class="filter-bar">
+      <button id="tag-menu-btn" class="filter-btn${selected.size ? " filtered" : ""}"
+        aria-haspopup="true" aria-expanded="false">
+        <span id="tag-menu-label">${esc(tagFilterLabel(selected))}</span>
+        <span class="filter-caret">▾</span>
+      </button>
+      <div id="tag-menu" class="tag-menu" hidden>
+        ${tags.map(t => `
+          <label class="tag-menu-item">
+            <input type="checkbox" data-tag="${t.id}" ${selected.has(t.id) ? "checked" : ""}>
+            <span class="tag-menu-name">${esc(t.name)}</span>
+            <span class="tag-menu-count">${Store.personsWithTag(t.id).length}</span>
+          </label>`).join("")}
+        <button id="tag-menu-clear" class="tag-menu-clear">Alle anzeigen</button>
+      </div>
+    </div>`;
+}
+
+function wireTagFilter(selected, onChange) {
+  const menu = document.getElementById("tag-menu");
+  const menuBtn = document.getElementById("tag-menu-btn");
+
+  function refresh() {
+    document.getElementById("tag-menu-label").textContent = tagFilterLabel(selected);
+    menuBtn.classList.toggle("filtered", selected.size > 0);
+    onChange();
+  }
+
+  menuBtn.addEventListener("click", () => {
+    const open = menu.hidden;
+    menu.hidden = !open;
+    menuBtn.setAttribute("aria-expanded", String(open));
+    menuBtn.classList.toggle("open", open);
+  });
+
+  menu.querySelectorAll('input[type="checkbox"]').forEach(cb =>
+    cb.addEventListener("change", () => {
+      if (cb.checked) selected.add(cb.dataset.tag);
+      else selected.delete(cb.dataset.tag);
+      refresh();
+    }));
+
+  document.getElementById("tag-menu-clear").addEventListener("click", () => {
+    selected.clear();
+    menu.querySelectorAll('input[type="checkbox"]').forEach(cb => (cb.checked = false));
+    refresh();
+    closeTagMenu();
+  });
+}
+
+const matchesTags = (person, selected) =>
+  selected.size === 0 || person.tagIds.some(id => selected.has(id));
 
 function renderPersons(detailId = null) {
   if (detailId) return renderPersonDetail(detailId);
-
-  const tags = Store.allTags();
-  // Inzwischen gelöschte Kategorien aus dem Filter werfen
-  const validIds = new Set(tags.map(t => t.id));
-  for (const id of activeTagFilters) if (!validIds.has(id)) activeTagFilters.delete(id);
 
   view.innerHTML = `
     <div class="persons">
@@ -136,22 +206,7 @@ function renderPersons(detailId = null) {
         <input id="search" type="search" placeholder="Suchen …">
         <button id="add-person" class="btn primary">+ Neu</button>
       </div>
-      <div class="filter-bar">
-        <button id="tag-menu-btn" class="filter-btn${activeTagFilters.size ? " filtered" : ""}"
-          aria-haspopup="true" aria-expanded="false">
-          <span id="tag-menu-label">${esc(tagFilterLabel())}</span>
-          <span class="filter-caret">▾</span>
-        </button>
-        <div id="tag-menu" class="tag-menu" hidden>
-          ${tags.map(t => `
-            <label class="tag-menu-item">
-              <input type="checkbox" data-tag="${t.id}" ${activeTagFilters.has(t.id) ? "checked" : ""}>
-              <span class="tag-menu-name">${esc(t.name)}</span>
-              <span class="tag-menu-count">${Store.personsWithTag(t.id).length}</span>
-            </label>`).join("")}
-          <button id="tag-menu-clear" class="tag-menu-clear">Alle anzeigen</button>
-        </div>
-      </div>
+      ${tagFilterMarkup(activeTagFilters)}
       <div id="person-list" class="person-list"></div>
     </div>`;
 
@@ -160,7 +215,7 @@ function renderPersons(detailId = null) {
 
   function draw(filter = "") {
     let items = filter ? Store.findByName(filter) : Store.all();
-    if (activeTagFilters.size) items = items.filter(p => p.tagIds.some(id => activeTagFilters.has(id)));
+    items = items.filter(p => matchesTags(p, activeTagFilters));
     if (items.length === 0) {
       list.innerHTML = `<div class="empty">${(filter || activeTagFilters.size) ? `Keine Treffer.` : `Noch keine Personen.<br>Lege die erste über „+ Neu“ oder den Assistenten an.`}</div>`;
       return;
@@ -189,35 +244,7 @@ function renderPersons(detailId = null) {
   search.addEventListener("input", () => draw(search.value.trim()));
   document.getElementById("add-person").addEventListener("click", () => openPersonForm(null));
 
-  const menu = document.getElementById("tag-menu");
-  const menuBtn = document.getElementById("tag-menu-btn");
-
-  function refreshFilter() {
-    document.getElementById("tag-menu-label").textContent = tagFilterLabel();
-    menuBtn.classList.toggle("filtered", activeTagFilters.size > 0);
-    draw(search.value.trim());
-  }
-
-  menuBtn.addEventListener("click", () => {
-    const open = menu.hidden;
-    menu.hidden = !open;
-    menuBtn.setAttribute("aria-expanded", String(open));
-    menuBtn.classList.toggle("open", open);
-  });
-
-  menu.querySelectorAll('input[type="checkbox"]').forEach(cb =>
-    cb.addEventListener("change", () => {
-      if (cb.checked) activeTagFilters.add(cb.dataset.tag);
-      else activeTagFilters.delete(cb.dataset.tag);
-      refreshFilter();
-    }));
-
-  document.getElementById("tag-menu-clear").addEventListener("click", () => {
-    activeTagFilters.clear();
-    menu.querySelectorAll('input[type="checkbox"]').forEach(cb => (cb.checked = false));
-    refreshFilter();
-    closeTagMenu();
-  });
+  wireTagFilter(activeTagFilters, () => draw(search.value.trim()));
 }
 
 // Einmalig registriert: das Filtermenü schließt bei Klick daneben oder mit Escape.
@@ -234,6 +261,93 @@ document.addEventListener("click", e => {
   if (!e.target.closest("#tag-menu") && !e.target.closest("#tag-menu-btn")) closeTagMenu();
 });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeTagMenu(); });
+
+// ---------- Ansicht: Geburtstage ----------
+
+const bdayTagFilters = new Set();
+let bdayReminderFilter = "on"; // on = nur mit Erinnerung (Vorgabe) | all | off
+
+function whenText(days, date) {
+  if (days === 0) return "Heute!";
+  const tag = date.toLocaleDateString("de-DE", { day: "numeric", month: "long" });
+  if (days === 1) return `Morgen · ${tag}`;
+  return `in ${days} Tagen · ${tag}`;
+}
+
+function renderBirthdays() {
+  const modes = [["on", "Mit Erinnerung"], ["all", "Alle"], ["off", "Ohne Erinnerung"]];
+  const incomplete = Calendar.incomplete();
+
+  view.innerHTML = `
+    <div class="birthdays">
+      ${tagFilterMarkup(bdayTagFilters)}
+      <div class="chip-row">
+        ${modes.map(([m, t]) =>
+          `<button class="chip ${bdayReminderFilter === m ? "active" : ""}" data-mode="${m}">${t}</button>`).join("")}
+      </div>
+      ${incomplete.length ? `<p class="muted small-text">⚠ ${incomplete.length === 1
+        ? "Bei einer Person ist eine Erinnerung aktiv, aber kein volles Geburtsdatum hinterlegt"
+        : `Bei ${incomplete.length} Personen ist eine Erinnerung aktiv, aber kein volles Geburtsdatum hinterlegt`} — ein Geburtsjahr allein ergibt keinen Geburtstag.</p>` : ""}
+      <div id="bday-list"></div>
+    </div>`;
+
+  const list = document.getElementById("bday-list");
+
+  function emptyText() {
+    if (!Store.db.persons.some(hasBirthday))
+      return "Noch keine Geburtstage.<br>Ein Geburtstag braucht Tag und Monat — ein Geburtsjahr allein genügt nicht.";
+    if (bdayReminderFilter === "on")
+      return "Für niemanden ist eine Erinnerung aktiv.<br>Wechsle auf „Alle“ und tippe auf die Glocke.";
+    return "Keine Treffer für diesen Filter.";
+  }
+
+  function draw() {
+    const items = Store.upcomingBirthdays().filter(({ person }) =>
+      matchesTags(person, bdayTagFilters) && (
+        bdayReminderFilter === "all" ? true :
+        bdayReminderFilter === "on" ? person.birthdayReminder : !person.birthdayReminder));
+
+    if (!items.length) {
+      list.innerHTML = `<div class="empty">${emptyText()}</div>`;
+      return;
+    }
+
+    list.innerHTML = items.map(({ person, days, date }) => {
+      const turns = ageOnNextBirthday(person);
+      const on = person.birthdayReminder;
+      return `<div class="card bday-card${days === 0 ? " today" : ""}" data-id="${person.id}">
+        <div class="bday-main">
+          <div class="person-name">${esc(fullName(person))}</div>
+          <div class="person-sub">${esc(whenText(days, date))}${turns ? ` · wird ${turns}` : ""}</div>
+        </div>
+        <button class="bday-bell${on ? " on" : ""}" data-bell="${person.id}" aria-pressed="${on}"
+          title="${on ? "Erinnerung ausschalten" : "Erinnerung einschalten"}">${on ? "🔔" : "🔕"}</button>
+      </div>`;
+    }).join("");
+
+    list.querySelectorAll(".bday-card").forEach(card =>
+      card.addEventListener("click", () => renderPersonDetail(card.dataset.id)));
+
+    // Store.onChange zeichnet die Ansicht neu — hier kein eigenes draw() nötig
+    list.querySelectorAll("[data-bell]").forEach(btn =>
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        const person = Store.get(btn.dataset.bell);
+        if (person) Store.setBirthdayReminder(person.id, !person.birthdayReminder);
+      }));
+  }
+
+  view.querySelectorAll("[data-mode]").forEach(chip =>
+    chip.addEventListener("click", () => {
+      bdayReminderFilter = chip.dataset.mode;
+      view.querySelectorAll("[data-mode]").forEach(c =>
+        c.classList.toggle("active", c.dataset.mode === bdayReminderFilter));
+      draw();
+    }));
+
+  wireTagFilter(bdayTagFilters, draw);
+  draw();
+}
 
 function renderPersonDetail(id) {
   const p = Store.get(id);
@@ -256,6 +370,13 @@ function renderPersonDetail(id) {
         </div>
         <div class="detail-age">${esc(ageText(p))}${p.birth?.date ? " · geb. " + new Date(p.birth.date + "T00:00:00").toLocaleDateString("de-DE") : (p.birth?.year ? " · Jahrgang " + p.birth.year : "")}</div>
         ${work ? `<div class="detail-age">💼 ${esc(work)}</div>` : ""}
+        ${(p.birth?.date || p.birthdayReminder) ? `
+          <label class="toggle-row bday-toggle">
+            <input type="checkbox" id="d-bday" ${p.birthdayReminder ? "checked" : ""}>
+            🎂 An den Geburtstag erinnern
+          </label>
+          ${p.birthdayReminder && !p.birth?.date
+            ? `<div class="muted small-text">Dafür fehlt noch ein vollständiges Geburtsdatum.</div>` : ""}` : ""}
 
         <h3>Kategorien</h3>
         <div class="chip-row" id="detail-tags">
@@ -317,8 +438,12 @@ function renderPersonDetail(id) {
     </div>`;
   }
 
-  document.getElementById("back").addEventListener("click", () => renderPersons());
+  // Zurück führt dorthin, wo man hergekommen ist — Personen- oder Geburtstagsliste
+  const backToList = () => (currentTab === "birthdays" ? renderBirthdays() : renderPersons());
+  document.getElementById("back").addEventListener("click", backToList);
   document.getElementById("edit").addEventListener("click", () => openPersonForm(p));
+  const bdayBox = document.getElementById("d-bday");
+  if (bdayBox) bdayBox.addEventListener("change", e => Store.setBirthdayReminder(id, e.target.checked));
   document.getElementById("show-tree").addEventListener("click", () => renderTreeView(id));
   view.querySelectorAll(".family-row.link").forEach(row =>
     row.addEventListener("click", () => renderPersonDetail(row.dataset.id)));
@@ -384,7 +509,7 @@ function renderPersonDetail(id) {
   document.getElementById("delete-person").addEventListener("click", () => {
     if (confirm(`${fullName(p)} wirklich löschen? Notizen gehen verloren.`)) {
       Store.deletePerson(id);
-      renderPersons();
+      backToList();
     }
   });
 }
@@ -473,6 +598,10 @@ function openPersonForm(person) {
           <label>Firma<input id="f-company" value="${esc(person?.company || "")}" placeholder="z. B. Bosch"></label>
           <label>Position<input id="f-position" value="${esc(person?.position || "")}" placeholder="z. B. Teamleiter"></label>
         </div>
+        <label class="toggle-row">
+          <input type="checkbox" id="f-bday" ${person?.birthdayReminder ? "checked" : ""}>
+          🎂 An den Geburtstag erinnern
+        </label>
         <label>Kategorien</label>
         <div class="chip-row" id="f-tags">
           ${Store.allTags().filter(t => t.id !== UNSORTED_TAG_ID).map(t =>
@@ -517,6 +646,7 @@ function openPersonForm(person) {
     let target;
     if (isNew) target = Store.createPerson(fields);
     else target = Store.updatePerson(person.id, fields);
+    Store.setBirthdayReminder(target.id, document.getElementById("f-bday").checked);
 
     const chosen = [...modalRoot.querySelectorAll("#f-tags .chip.active")].map(c => c.dataset.tag);
     for (const tagId of Store.allTags().map(t => t.id)) {
@@ -640,6 +770,21 @@ function renderSettings() {
       </div>
 
       <div class="card">
+        <h3>Geburtstags-Erinnerungen</h3>
+        <p class="muted small-text">Für jede Person mit aktivierter Erinnerung legt die App einen jährlich wiederkehrenden Termin in deinem Google Kalender an. Das Erinnern übernimmt dann der Kalender — der meldet sich auch, wenn die App gar nicht offen ist. Termine, die die App nicht selbst angelegt hat, fasst sie nicht an.</p>
+        <label class="toggle-row">
+          <input type="checkbox" id="s-cal" ${s.calendarEnabled ? "checked" : ""}>
+          Geburtstage automatisch abgleichen
+        </label>
+        <label>Erinnerung wie viele Tage vorher (0 = am Tag selbst)
+          <input id="s-cal-lead" type="number" min="0" max="28" value="${s.calendarLeadDays}"></label>
+        <div class="settings-row">
+          <button id="s-cal-sync" class="btn primary">Jetzt abgleichen</button>
+          <span id="cal-status" class="muted">${Calendar.pending()} ${Calendar.pending() === 1 ? "Erinnerung" : "Erinnerungen"} aktiv</span>
+        </div>
+      </div>
+
+      <div class="card">
         <h3>Sprachausgabe</h3>
         <label class="toggle-row">
           <input type="checkbox" id="s-tts" ${s.ttsEnabled ? "checked" : ""}>
@@ -666,6 +811,28 @@ function renderSettings() {
       Settings.data.anthropicKey ? "Schlüssel gespeichert ✓" : "Das Feld ist leer.";
   });
   document.getElementById("s-tts").addEventListener("change", e => Settings.set("ttsEnabled", e.target.checked));
+
+  document.getElementById("s-cal").addEventListener("change", e =>
+    Settings.set("calendarEnabled", e.target.checked));
+  document.getElementById("s-cal-lead").addEventListener("change", e => {
+    const days = Math.max(0, Math.min(28, Number(e.target.value) || 0));
+    e.target.value = days;
+    Settings.set("calendarLeadDays", days);
+  });
+  document.getElementById("s-cal-sync").addEventListener("click", async () => {
+    const status = document.getElementById("cal-status");
+    Settings.set("googleClientId", document.getElementById("s-gcid").value.trim());
+    if (!Settings.data.googleClientId) { alert("Bitte zuerst die Google Client-ID eintragen."); return; }
+    status.textContent = "Gleiche ab …";
+    try {
+      const r = await Calendar.sync(true);
+      Settings.set("calendarEnabled", true);
+      document.getElementById("s-cal").checked = true;
+      status.textContent = `${r.angelegt} neu · ${r.aktualisiert} aktualisiert · ${r.entfernt} entfernt`;
+    } catch (e) {
+      status.textContent = "Fehler: " + e.message;
+    }
+  });
 
   const newTagInput = document.getElementById("new-tag");
   document.getElementById("add-tag").addEventListener("click", () => {
