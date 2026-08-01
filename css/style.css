@@ -514,6 +514,13 @@ body {
   color: var(--text);
 }
 .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+/* Gesperrte Felder sollen sichtbar gesperrt aussehen, nicht nur nicht reagieren */
+.settings input[readonly] {
+  opacity: 0.6;
+  background: var(--border);
+  cursor: default;
+}
 .toggle-row {
   display: flex !important;
   align-items: center;

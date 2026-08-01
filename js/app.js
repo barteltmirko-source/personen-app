@@ -785,18 +785,21 @@ function renderSettings() {
 
       <div class="card">
         <h3>Geburtstags-Erinnerungen</h3>
-        <p class="muted small-text">Die App legt dafür einen eigenen Kalender in deinem Google-Konto an und trägt dort für jede Person mit aktivierter Erinnerung einen jährlich wiederkehrenden Termin ein. Das Erinnern übernimmt dann der Kalender — der meldet sich auch, wenn die App gar nicht offen ist. Auf die Termine deiner übrigen Kalender hat die App keinen Zugriff.</p>
-        <p class="muted small-text">Nötiger Scope in der Cloud Console: <code>calendar.app.created</code>. Die Farbe des Kalenders stellst du in Google Kalender selbst ein — dort in der Seitenleiste über das Drei-Punkte-Menü des Kalenders.</p>
+        <p class="muted small-text">Die Geburtstage landen in einem eigenen Google-Kalender. Das Erinnern übernimmt dann der Kalender — auch wenn die App nicht offen ist.</p>
         ${Calendar.legacyDropped ? `<p class="muted small-text">⚠ Frühere Erinnerungen lagen in deinem Hauptkalender. Die App verwaltet sie dort nicht mehr — bitte lösche sie einmalig von Hand in Google Kalender.</p>` : ""}
         <label class="toggle-row">
           <input type="checkbox" id="s-cal" ${s.calendarEnabled ? "checked" : ""}>
           Geburtstage automatisch abgleichen
         </label>
-        <label>Name des Kalenders<input id="s-cal-name" value="${esc(s.calendarName)}" placeholder="Geburtstage"></label>
+        <label>Name des Kalenders
+          <input id="s-cal-name" value="${esc(s.calendarName)}" placeholder="Geburtstage" readonly></label>
+        <div class="settings-row">
+          <button id="s-cal-name-edit" class="btn ghost small">Namen ändern</button>
+        </div>
         <label>Erinnerung wie viele Tage vorher (0 = am Tag selbst)
           <input id="s-cal-lead" type="number" min="0" max="28" value="${s.calendarLeadDays}"></label>
         <p class="muted small-text">${s.calendarId
-          ? `Kalender „${esc(s.calendarAppliedName || s.calendarName)}“ ist angelegt. Eine Umbenennung wird beim nächsten Abgleich übernommen.`
+          ? "Der Kalender ist angelegt. Ein geänderter Name wird beim nächsten Abgleich übernommen."
           : "Der Kalender wird beim ersten Abgleich angelegt."}</p>
         <div class="settings-row">
           <button id="s-cal-sync" class="btn primary">Jetzt abgleichen</button>
@@ -815,21 +818,17 @@ function renderSettings() {
 
       <div class="card">
         <h3>Geburtstage aus Kalender importieren</h3>
-        <p class="muted small-text">Liest Termine aus einer Kalenderdatei (.ics) und legt daraus Personen an. In Google Kalender bekommst du sie über Einstellungen → Import/Export → Exportieren; das ist ein ZIP, das du erst entpacken musst.</p>
-        <p class="muted small-text">Der Termintitel wird unverändert übernommen: erstes Wort als Vorname, alles Weitere als Nachname. Aus „Anna Schmidt Geburtstag“ wird also der Nachname „Schmidt Geburtstag“ — nachbessern kannst du das auf der Personenseite.</p>
+        <p class="muted small-text">Legt Personen aus einer Kalenderdatei (.ics) an. Aus dem Termintitel wird das erste Wort der Vorname, der Rest der Nachname. Google exportiert ein ZIP — daraus die .ics entpacken.</p>
         <label>Kategorie für die importierten Personen (Pflicht)
           <select id="imp-tag">
             <option value="">— bitte wählen —</option>
             ${Store.allTags().map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}
-            <option value="__new__">➕ Neue Kategorie …</option>
           </select></label>
-        <label id="imp-newtag-row" hidden>Name der neuen Kategorie
-          <input id="imp-newtag" placeholder="z. B. Doka"></label>
         <label class="toggle-row">
           <input type="checkbox" id="imp-year">
           Das Jahr in dieser Datei ist das echte Geburtsjahr
         </label>
-        <p class="muted small-text">Bei Googles Kontakte-Geburtstagen zutrifft das meist. Bei einem selbst gepflegten Kalender ist das Jahr oft nur das Jahr, in dem du den Termin angelegt hast — dann lass das Häkchen weg, es werden nur Tag und Monat übernommen.</p>
+        <p class="muted small-text">Ohne Häkchen werden nur Tag und Monat übernommen. Bei selbst angelegten Terminen ist das Jahr meist nur das Jahr der Anlage.</p>
         <div class="settings-row">
           <button id="imp-file" class="btn primary" disabled>.ics-Datei wählen</button>
           <input id="imp-input" type="file" accept=".ics,text/calendar" multiple hidden>
@@ -859,8 +858,28 @@ function renderSettings() {
 
   document.getElementById("s-cal").addEventListener("change", e =>
     Settings.set("calendarEnabled", e.target.checked));
-  document.getElementById("s-cal-name").addEventListener("input", e =>
-    Settings.set("calendarName", e.target.value));
+  // Der Kalendername ist gesperrt, bis man ihn ausdrücklich ändern will —
+  // er hängt an einem echten Kalender in Google, das verstellt man nicht nebenbei.
+  const calName = document.getElementById("s-cal-name");
+  const calNameBtn = document.getElementById("s-cal-name-edit");
+  calNameBtn.addEventListener("click", () => {
+    if (calName.readOnly) {
+      calName.readOnly = false;
+      calName.focus();
+      calName.select();
+      calNameBtn.textContent = "Übernehmen";
+      return;
+    }
+    const neu = calName.value.trim();
+    if (!neu) { alert("Bitte einen Namen für den Kalender angeben."); calName.focus(); return; }
+    Settings.set("calendarName", neu);
+    calName.value = neu;
+    calName.readOnly = true;
+    calNameBtn.textContent = "Namen ändern";
+  });
+  calName.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !calName.readOnly) { e.preventDefault(); calNameBtn.click(); }
+  });
   document.getElementById("s-cal-lead").addEventListener("change", e => {
     const days = Math.max(0, Math.min(28, Number(e.target.value) || 0));
     e.target.value = days;
@@ -923,33 +942,21 @@ function renderSettings() {
 
   // ---- Import aus Kalenderdatei ----
   const impTag = document.getElementById("imp-tag");
-  const impNewRow = document.getElementById("imp-newtag-row");
-  const impNew = document.getElementById("imp-newtag");
   const impFile = document.getElementById("imp-file");
   const impInput = document.getElementById("imp-input");
   const impStatus = document.getElementById("imp-status");
 
   // Ohne Kategorie wird nicht importiert — der Knopf bleibt gesperrt, damit
   // niemand erst eine Datei aussucht und dann abgewiesen wird.
-  function chosenTagName() {
-    if (impTag.value === "__new__") return impNew.value.trim();
-    if (!impTag.value) return "";
-    return Store.getTag(impTag.value)?.name || "";
-  }
+  const chosenTag = () => (impTag.value ? Store.getTag(impTag.value) : null);
   function refreshImportState() {
-    impNewRow.hidden = impTag.value !== "__new__";
-    const ok = chosenTagName().length > 0;
-    impFile.disabled = !ok;
-    if (!ok) {
-      impStatus.textContent = impTag.value === "__new__"
-        ? "Bitte einen Namen für die neue Kategorie eingeben."
-        : "Bitte zuerst eine Kategorie wählen.";
-    } else {
-      impStatus.textContent = `Importierte Personen kommen nach „${chosenTagName()}“.`;
-    }
+    const tag = chosenTag();
+    impFile.disabled = !tag;
+    impStatus.textContent = tag
+      ? `Importierte Personen kommen nach „${tag.name}“.`
+      : "Bitte zuerst eine Kategorie wählen.";
   }
   impTag.addEventListener("change", refreshImportState);
-  impNew.addEventListener("input", refreshImportState);
   refreshImportState();
 
   impFile.addEventListener("click", () => impInput.click());
@@ -958,10 +965,8 @@ function renderSettings() {
     impInput.value = ""; // damit dieselbe Datei erneut gewählt werden kann
     if (!files.length) return;
 
-    const name = chosenTagName();
-    if (!name) return;
-    const tag = Store.findTagByName(name) || Store.createTag(name);
-    if (!tag) { impStatus.textContent = "Die Kategorie konnte nicht angelegt werden."; return; }
+    const tag = chosenTag();
+    if (!tag) return;
     const nimmJahr = document.getElementById("imp-year").checked;
 
     let angelegt = 0, uebersprungen = 0;
