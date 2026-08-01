@@ -8,10 +8,18 @@
 import { Settings } from "./store.js";
 
 export const SCOPE_DRIVE = "https://www.googleapis.com/auth/drive.file";
-// calendar.app.created statt des breiteren calendar.events: erlaubt genau das,
-// was die App braucht — einen eigenen Kalender anlegen, umbenennen, einfärben
-// und dessen Termine verwalten. Auf andere Kalender kommt sie damit nicht.
-export const SCOPE_CALENDAR = "https://www.googleapis.com/auth/calendar.app.created";
+// calendar.app.created deckt genau das ab, was die App im Kern braucht: einen
+// eigenen Kalender anlegen, umbenennen und dessen Termine verwalten — ohne
+// Zugriff auf die übrigen Kalender des Nutzers.
+//
+// Die Farbe sitzt bei Google aber nicht am Kalender, sondern am Eintrag in der
+// Kalenderliste, und der liegt außerhalb dieses Scopes ("… and delete events on
+// them"). Dafür kommt calendar.calendarlist dazu. Fehlt die Zustimmung, läuft
+// alles Übrige trotzdem — nur die Farbe bleibt dann Googles Vorgabe.
+export const SCOPE_CALENDAR = [
+  "https://www.googleapis.com/auth/calendar.app.created",
+  "https://www.googleapis.com/auth/calendar.calendarlist",
+].join(" ");
 
 const clients = new Map(); // scope -> { client, clientId, token, expiry }
 

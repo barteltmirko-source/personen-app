@@ -128,25 +128,42 @@ export const Calendar = {
       Settings.set("calendarAppliedColor", ""); // Farbe gleich unten setzen
     }
 
-    await this.applyNameAndColor(id);
     return id;
   },
 
+  // Name und Farbe sind Beiwerk — die Termine sind der Zweck. Scheitert eines
+  // von beidem (etwa weil die Berechtigung für die Kalenderliste fehlt), darf
+  // das den Abgleich nicht abbrechen; es wird nur gemeldet.
   async applyNameAndColor(id) {
+    const warnungen = [];
+
     const name = calendarName();
     if (Settings.data.calendarAppliedName !== name) {
-      await api(SCOPE_CALENDAR, calPath(id), { method: "PATCH", ...json({ summary: name }) });
-      Settings.set("calendarAppliedName", name);
+      try {
+        await api(SCOPE_CALENDAR, calPath(id), { method: "PATCH", ...json({ summary: name }) });
+        Settings.set("calendarAppliedName", name);
+      } catch (e) {
+        warnungen.push("Der Kalendername konnte nicht übernommen werden.");
+      }
     }
+
     const color = Settings.data.calendarColor;
     if (color && Settings.data.calendarAppliedColor !== color) {
-      // colorRgbFormat=true erlaubt freie Farben statt Googles fester Palette
-      await api(SCOPE_CALENDAR, `/calendar/v3/users/me/calendarList/${enc(id)}?colorRgbFormat=true`, {
-        method: "PATCH",
-        ...json({ backgroundColor: color, foregroundColor: contrastOn(color) }),
-      });
-      Settings.set("calendarAppliedColor", color);
+      try {
+        // colorRgbFormat=true erlaubt freie Farben statt Googles fester Palette
+        await api(SCOPE_CALENDAR, `/calendar/v3/users/me/calendarList/${enc(id)}?colorRgbFormat=true`, {
+          method: "PATCH",
+          ...json({ backgroundColor: color, foregroundColor: contrastOn(color) }),
+        });
+        Settings.set("calendarAppliedColor", color);
+      } catch (e) {
+        warnungen.push(
+          "Die Farbe konnte nicht gesetzt werden — dafür fehlt die Berechtigung für die " +
+          "Kalenderliste. Trage den Scope calendar.calendarlist in der Cloud Console ein " +
+          "und erteile den Zugriff neu.");
+      }
     }
+    return warnungen;
   },
 
   async sync(interactive = false, forceConsent = false) {
@@ -154,7 +171,8 @@ export const Calendar = {
     await getToken(SCOPE_CALENDAR, interactive || forceConsent, forceConsent);
     const calId = await this.ensureCalendar();
     const events = `${calPath(calId)}/events`;
-
+    // Zuerst die Termine, danach die Kosmetik — so kostet ein Problem mit
+    // Name oder Farbe nie die Erinnerungen selbst.
     let angelegt = 0, aktualisiert = 0, entfernt = 0;
     for (const p of Store.db.persons) {
       if (p.birthdayReminder && hasBirthday(p)) {
@@ -179,7 +197,8 @@ export const Calendar = {
         entfernt++;
       }
     }
-    return { angelegt, aktualisiert, entfernt };
+    const warnungen = await this.applyNameAndColor(calId);
+    return { angelegt, aktualisiert, entfernt, warnungen };
   },
 
   // Nach Änderungen verzögert abgleichen, damit schnelle Folgeänderungen
@@ -191,7 +210,8 @@ export const Calendar = {
       try {
         const r = await this.sync(false);
         this.setStatus("synchronisiert",
-          `${r.angelegt} neu, ${r.aktualisiert} aktualisiert, ${r.entfernt} entfernt`);
+          `${r.angelegt} neu, ${r.aktualisiert} aktualisiert, ${r.entfernt} entfernt`
+          + (r.warnungen.length ? " — " + r.warnungen.join(" ") : ""));
       } catch (e) {
         console.error(e);
         this.setStatus("fehler", e.message);

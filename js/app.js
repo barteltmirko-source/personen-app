@@ -772,7 +772,8 @@ function renderSettings() {
 
       <div class="card">
         <h3>Geburtstags-Erinnerungen</h3>
-        <p class="muted small-text">Die App legt dafür einen eigenen Kalender in deinem Google-Konto an und trägt dort für jede Person mit aktivierter Erinnerung einen jährlich wiederkehrenden Termin ein. Das Erinnern übernimmt dann der Kalender — der meldet sich auch, wenn die App gar nicht offen ist. Auf deine übrigen Kalender hat die App keinen Zugriff.</p>
+        <p class="muted small-text">Die App legt dafür einen eigenen Kalender in deinem Google-Konto an und trägt dort für jede Person mit aktivierter Erinnerung einen jährlich wiederkehrenden Termin ein. Das Erinnern übernimmt dann der Kalender — der meldet sich auch, wenn die App gar nicht offen ist. Auf die Termine deiner übrigen Kalender hat die App keinen Zugriff.</p>
+        <p class="muted small-text">Nötige Scopes in der Cloud Console: <code>calendar.app.created</code> für Kalender und Termine, zusätzlich <code>calendar.calendarlist</code> nur für die Farbe. Ohne den zweiten funktioniert alles außer der Farbe.</p>
         ${Calendar.legacyDropped ? `<p class="muted small-text">⚠ Frühere Erinnerungen lagen in deinem Hauptkalender. Die App verwaltet sie dort nicht mehr — bitte lösche sie einmalig von Hand in Google Kalender.</p>` : ""}
         <label class="toggle-row">
           <input type="checkbox" id="s-cal" ${s.calendarEnabled ? "checked" : ""}>
@@ -842,8 +843,10 @@ function renderSettings() {
     try {
       const r = await Calendar.sync(true, forceConsent);
       Settings.set("calendarEnabled", true);
-      status.textContent = `${r.angelegt} neu · ${r.aktualisiert} aktualisiert · ${r.entfernt} entfernt`;
+      const zusammenfassung = `${r.angelegt} neu · ${r.aktualisiert} aktualisiert · ${r.entfernt} entfernt`;
       renderSettings(); // Kalendername/-status in der Ansicht nachziehen
+      document.getElementById("cal-status").textContent =
+        zusammenfassung + (r.warnungen.length ? " — " + r.warnungen.join(" ") : "");
     } catch (e) {
       status.textContent = "Fehler: " + e.message;
     }
