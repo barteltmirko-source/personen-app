@@ -9,10 +9,14 @@
 // auch offline und ohne dass die App je geöffnet wird.
 //
 // Die Geburtstage landen in einem separaten Kalender, den die App selbst
-// anlegt (Name und Farbe bestimmt der Nutzer). Dadurch lassen sie sich in
-// Google mit einem Haken ein- und ausblenden, und der Hauptkalender bleibt
-// unberührt — der Scope calendar.app.created gibt der App ohnehin nur Zugriff
-// auf Kalender, die sie selbst erzeugt hat.
+// anlegt; den Namen bestimmt der Nutzer. Dadurch lassen sie sich in Google mit
+// einem Haken ein- und ausblenden, und der Hauptkalender bleibt unberührt —
+// der Scope calendar.app.created gibt der App ohnehin nur Zugriff auf
+// Kalender, die sie selbst erzeugt hat.
+//
+// Die Farbe vergibt der Nutzer in Google Kalender selbst. Sie sitzt dort am
+// Eintrag in der Kalenderliste, und den anzufassen würde eine zusätzliche
+// Berechtigung auf die gesamte Kalenderliste kosten — zu viel für Kosmetik.
 "use strict";
 
 import { Store, Settings, fullName, hasBirthday } from "./store.js";
@@ -30,12 +34,6 @@ const json = body => ({
 });
 
 const calendarName = () => (Settings.data.calendarName || "").trim() || "Geburtstage";
-
-// Schrift auf der Kalenderfarbe: dunkel auf hellem Grund, sonst weiß
-function contrastOn(hex) {
-  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.6 ? "#000000" : "#ffffff";
-}
 
 // Google zählt die Vorwarnzeit in Minuten vor Mitternacht des Termintags.
 // 0 Tage vorher = Mitternacht, sonst 9 Uhr morgens am jeweiligen Tag.
@@ -108,7 +106,6 @@ export const Calendar = {
         id = "";
         Settings.set("calendarId", "");
         Settings.set("calendarAppliedName", "");
-        Settings.set("calendarAppliedColor", "");
         for (const p of Store.db.persons) Store.setCalendarEventId(p.id, null);
       }
     }
@@ -125,45 +122,24 @@ export const Calendar = {
       id = (await resp.json()).id;
       Settings.set("calendarId", id);
       Settings.set("calendarAppliedName", calendarName());
-      Settings.set("calendarAppliedColor", ""); // Farbe gleich unten setzen
     }
 
     return id;
   },
 
-  // Name und Farbe sind Beiwerk — die Termine sind der Zweck. Scheitert eines
-  // von beidem (etwa weil die Berechtigung für die Kalenderliste fehlt), darf
-  // das den Abgleich nicht abbrechen; es wird nur gemeldet.
-  async applyNameAndColor(id) {
-    const warnungen = [];
-
+  // Der Name ist Beiwerk — die Termine sind der Zweck. Ein Fehlschlag beim
+  // Umbenennen darf den Abgleich deshalb nicht abbrechen, sondern wird nur
+  // gemeldet und beim nächsten Mal erneut versucht.
+  async applyName(id) {
     const name = calendarName();
-    if (Settings.data.calendarAppliedName !== name) {
-      try {
-        await api(SCOPE_CALENDAR, calPath(id), { method: "PATCH", ...json({ summary: name }) });
-        Settings.set("calendarAppliedName", name);
-      } catch (e) {
-        warnungen.push("Der Kalendername konnte nicht übernommen werden.");
-      }
+    if (Settings.data.calendarAppliedName === name) return [];
+    try {
+      await api(SCOPE_CALENDAR, calPath(id), { method: "PATCH", ...json({ summary: name }) });
+      Settings.set("calendarAppliedName", name);
+      return [];
+    } catch (e) {
+      return ["Der Kalendername konnte nicht übernommen werden."];
     }
-
-    const color = Settings.data.calendarColor;
-    if (color && Settings.data.calendarAppliedColor !== color) {
-      try {
-        // colorRgbFormat=true erlaubt freie Farben statt Googles fester Palette
-        await api(SCOPE_CALENDAR, `/calendar/v3/users/me/calendarList/${enc(id)}?colorRgbFormat=true`, {
-          method: "PATCH",
-          ...json({ backgroundColor: color, foregroundColor: contrastOn(color) }),
-        });
-        Settings.set("calendarAppliedColor", color);
-      } catch (e) {
-        warnungen.push(
-          "Die Farbe konnte nicht gesetzt werden — dafür fehlt die Berechtigung für die " +
-          "Kalenderliste. Trage den Scope calendar.calendarlist in der Cloud Console ein " +
-          "und erteile den Zugriff neu.");
-      }
-    }
-    return warnungen;
   },
 
   async sync(interactive = false, forceConsent = false) {
@@ -171,8 +147,8 @@ export const Calendar = {
     await getToken(SCOPE_CALENDAR, interactive || forceConsent, forceConsent);
     const calId = await this.ensureCalendar();
     const events = `${calPath(calId)}/events`;
-    // Zuerst die Termine, danach die Kosmetik — so kostet ein Problem mit
-    // Name oder Farbe nie die Erinnerungen selbst.
+    // Zuerst die Termine, danach der Name — so kostet ein Problem beim
+    // Umbenennen nie die Erinnerungen selbst.
     let angelegt = 0, aktualisiert = 0, entfernt = 0;
     for (const p of Store.db.persons) {
       if (p.birthdayReminder && hasBirthday(p)) {
@@ -197,7 +173,7 @@ export const Calendar = {
         entfernt++;
       }
     }
-    const warnungen = await this.applyNameAndColor(calId);
+    const warnungen = await this.applyName(calId);
     return { angelegt, aktualisiert, entfernt, warnungen };
   },
 

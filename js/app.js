@@ -773,21 +773,17 @@ function renderSettings() {
       <div class="card">
         <h3>Geburtstags-Erinnerungen</h3>
         <p class="muted small-text">Die App legt dafür einen eigenen Kalender in deinem Google-Konto an und trägt dort für jede Person mit aktivierter Erinnerung einen jährlich wiederkehrenden Termin ein. Das Erinnern übernimmt dann der Kalender — der meldet sich auch, wenn die App gar nicht offen ist. Auf die Termine deiner übrigen Kalender hat die App keinen Zugriff.</p>
-        <p class="muted small-text">Nötige Scopes in der Cloud Console: <code>calendar.app.created</code> für Kalender und Termine, zusätzlich <code>calendar.calendarlist</code> nur für die Farbe. Ohne den zweiten funktioniert alles außer der Farbe.</p>
+        <p class="muted small-text">Nötiger Scope in der Cloud Console: <code>calendar.app.created</code>. Die Farbe des Kalenders stellst du in Google Kalender selbst ein — dort in der Seitenleiste über das Drei-Punkte-Menü des Kalenders.</p>
         ${Calendar.legacyDropped ? `<p class="muted small-text">⚠ Frühere Erinnerungen lagen in deinem Hauptkalender. Die App verwaltet sie dort nicht mehr — bitte lösche sie einmalig von Hand in Google Kalender.</p>` : ""}
         <label class="toggle-row">
           <input type="checkbox" id="s-cal" ${s.calendarEnabled ? "checked" : ""}>
           Geburtstage automatisch abgleichen
         </label>
         <label>Name des Kalenders<input id="s-cal-name" value="${esc(s.calendarName)}" placeholder="Geburtstage"></label>
-        <div class="form-row">
-          <label>Farbe
-            <input id="s-cal-color" type="color" value="${esc(s.calendarColor)}" class="color-input"></label>
-          <label>Erinnerung Tage vorher (0 = am Tag selbst)
-            <input id="s-cal-lead" type="number" min="0" max="28" value="${s.calendarLeadDays}"></label>
-        </div>
+        <label>Erinnerung wie viele Tage vorher (0 = am Tag selbst)
+          <input id="s-cal-lead" type="number" min="0" max="28" value="${s.calendarLeadDays}"></label>
         <p class="muted small-text">${s.calendarId
-          ? `Kalender „${esc(s.calendarAppliedName || s.calendarName)}“ ist angelegt. Änderungen an Name und Farbe werden beim nächsten Abgleich übernommen.`
+          ? `Kalender „${esc(s.calendarAppliedName || s.calendarName)}“ ist angelegt. Eine Umbenennung wird beim nächsten Abgleich übernommen.`
           : "Der Kalender wird beim ersten Abgleich angelegt."}</p>
         <div class="settings-row">
           <button id="s-cal-sync" class="btn primary">Jetzt abgleichen</button>
@@ -828,8 +824,6 @@ function renderSettings() {
     Settings.set("calendarEnabled", e.target.checked));
   document.getElementById("s-cal-name").addEventListener("input", e =>
     Settings.set("calendarName", e.target.value));
-  document.getElementById("s-cal-color").addEventListener("change", e =>
-    Settings.set("calendarColor", e.target.value));
   document.getElementById("s-cal-lead").addEventListener("change", e => {
     const days = Math.max(0, Math.min(28, Number(e.target.value) || 0));
     e.target.value = days;

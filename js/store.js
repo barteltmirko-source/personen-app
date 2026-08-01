@@ -588,11 +588,8 @@ export const Settings = {
     calendarEnabled: false, // Geburtstage in den Google Kalender schreiben
     calendarLeadDays: 1,    // wie viele Tage vorher erinnert wird (0 = am Tag selbst)
     calendarName: "Geburtstage",
-    calendarColor: "#4f6ef7",
-    calendarId: "",         // ID des von der App angelegten Google-Kalenders
-    // Zuletzt an Google übertragener Stand — spart Abfragen bei jedem Abgleich
-    calendarAppliedName: "",
-    calendarAppliedColor: "",
+    calendarId: "",          // ID des von der App angelegten Google-Kalenders
+    calendarAppliedName: "", // zuletzt an Google übertragener Name
   },
   load() {
     try {
