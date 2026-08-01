@@ -313,6 +313,12 @@ body {
 .bday-bell.on { opacity: 1; border-color: var(--accent); background: var(--card); }
 .bday-toggle { margin: 4px 0 12px; }
 
+.color-input {
+  height: 42px;
+  padding: 4px;
+  cursor: pointer;
+}
+
 /* ---------- Detail ---------- */
 .detail-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .detail-head h2 { font-size: 1.3rem; }

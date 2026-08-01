@@ -1,4 +1,5 @@
-// calendar.js — Geburtstage als jährlich wiederkehrende Termine im Google Kalender.
+// calendar.js — Geburtstage als jährlich wiederkehrende Termine in einem
+// eigenen Google-Kalender.
 //
 // Warum überhaupt der Kalender: Eine reine Web-App kann sich nicht selbst zu
 // einem Zeitpunkt aufwecken. Die dafür gedachte Browser-Schnittstelle
@@ -7,19 +8,34 @@
 // den gibt es hier bewusst nicht. Der Kalender erinnert dagegen zuverlässig,
 // auch offline und ohne dass die App je geöffnet wird.
 //
-// Die App verwaltet ausschließlich Termine, die sie selbst angelegt hat: die
-// zugehörige Termin-ID steht bei der Person. Was sie nicht angelegt hat,
-// fasst sie auch nicht an.
+// Die Geburtstage landen in einem separaten Kalender, den die App selbst
+// anlegt (Name und Farbe bestimmt der Nutzer). Dadurch lassen sie sich in
+// Google mit einem Haken ein- und ausblenden, und der Hauptkalender bleibt
+// unberührt — der Scope calendar.app.created gibt der App ohnehin nur Zugriff
+// auf Kalender, die sie selbst erzeugt hat.
 "use strict";
 
 import { Store, Settings, fullName, hasBirthday } from "./store.js";
 import { SCOPE_CALENDAR, getToken, api } from "./google.js";
 
-const CAL = "primary";
-const base = `/calendar/v3/calendars/${CAL}/events`;
+const enc = encodeURIComponent;
+const calPath = id => `/calendar/v3/calendars/${enc(id)}`;
 
 const isoDate = d =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+const json = body => ({
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+const calendarName = () => (Settings.data.calendarName || "").trim() || "Geburtstage";
+
+// Schrift auf der Kalenderfarbe: dunkel auf hellem Grund, sonst weiß
+function contrastOn(hex) {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.6 ? "#000000" : "#ffffff";
+}
 
 // Google zählt die Vorwarnzeit in Minuten vor Mitternacht des Termintags.
 // 0 Tage vorher = Mitternacht, sonst 9 Uhr morgens am jeweiligen Tag.
@@ -30,13 +46,11 @@ function reminderMinutes(leadDays) {
 
 function eventBody(person) {
   const [y, m, d] = person.birth.date.split("-").map(Number);
-  const start = new Date(y, m - 1, d);
-  const end = new Date(y, m - 1, d + 1);
   return {
     summary: `🎂 ${fullName(person)}`,
     description: "Angelegt von der App „Personen-Gedächtnis“.",
-    start: { date: isoDate(start) },
-    end: { date: isoDate(end) },
+    start: { date: isoDate(new Date(y, m - 1, d)) },
+    end: { date: isoDate(new Date(y, m - 1, d + 1)) },
     recurrence: ["RRULE:FREQ=YEARLY"],
     transparency: "transparent", // blockiert den Tag nicht als „beschäftigt“
     reminders: {
@@ -46,15 +60,11 @@ function eventBody(person) {
   };
 }
 
-const json = body => ({
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body),
-});
-
 export const Calendar = {
   status: "getrennt", // getrennt | synchronisiert | fehler
   statusListeners: [],
   syncTimer: null,
+  legacyDropped: false,
 
   onStatus(fn) { this.statusListeners.push(fn); },
   setStatus(s, detail = "") {
@@ -64,7 +74,6 @@ export const Calendar = {
 
   configured() { return !!Settings.data.googleClientId; },
 
-  // Wie viele Personen die Synchronisation betreffen würde
   pending() {
     return Store.db.persons.filter(p => p.birthdayReminder && hasBirthday(p)).length;
   },
@@ -74,28 +83,97 @@ export const Calendar = {
     return Store.db.persons.filter(p => p.birthdayReminder && !hasBirthday(p) && !p.death);
   },
 
+  // Frühere Fassungen schrieben in den Hauptkalender. Mit dem eingeschränkten
+  // Scope kommt die App an diese Termine nicht mehr heran, die Verweise wären
+  // also nur irreführend. Muss nach Store.load()/Settings.load() laufen.
+  dropLegacyEvents() {
+    if (Settings.data.calendarId) return false;
+    const stale = Store.db.persons.filter(p => p.calendarEventId);
+    if (!stale.length) return false;
+    for (const p of stale) Store.setCalendarEventId(p.id, null);
+    this.legacyDropped = true;
+    return true;
+  },
+
+  // Legt den Kalender an, falls es ihn noch nicht gibt, und zieht Name und
+  // Farbe nach, wenn der Nutzer sie geändert hat.
+  async ensureCalendar() {
+    let id = Settings.data.calendarId;
+
+    if (id) {
+      try {
+        await api(SCOPE_CALENDAR, calPath(id));
+      } catch (e) {
+        // In Google gelöscht → neu anlegen; die alten Termin-IDs sind wertlos
+        id = "";
+        Settings.set("calendarId", "");
+        Settings.set("calendarAppliedName", "");
+        Settings.set("calendarAppliedColor", "");
+        for (const p of Store.db.persons) Store.setCalendarEventId(p.id, null);
+      }
+    }
+
+    if (!id) {
+      const resp = await api(SCOPE_CALENDAR, "/calendar/v3/calendars", {
+        method: "POST",
+        ...json({
+          summary: calendarName(),
+          description: "Geburtstage aus der App „Personen-Gedächtnis“.",
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
+      });
+      id = (await resp.json()).id;
+      Settings.set("calendarId", id);
+      Settings.set("calendarAppliedName", calendarName());
+      Settings.set("calendarAppliedColor", ""); // Farbe gleich unten setzen
+    }
+
+    await this.applyNameAndColor(id);
+    return id;
+  },
+
+  async applyNameAndColor(id) {
+    const name = calendarName();
+    if (Settings.data.calendarAppliedName !== name) {
+      await api(SCOPE_CALENDAR, calPath(id), { method: "PATCH", ...json({ summary: name }) });
+      Settings.set("calendarAppliedName", name);
+    }
+    const color = Settings.data.calendarColor;
+    if (color && Settings.data.calendarAppliedColor !== color) {
+      // colorRgbFormat=true erlaubt freie Farben statt Googles fester Palette
+      await api(SCOPE_CALENDAR, `/calendar/v3/users/me/calendarList/${enc(id)}?colorRgbFormat=true`, {
+        method: "PATCH",
+        ...json({ backgroundColor: color, foregroundColor: contrastOn(color) }),
+      });
+      Settings.set("calendarAppliedColor", color);
+    }
+  },
+
   async sync(interactive = false) {
     if (!this.configured()) throw new Error("Keine Google Client-ID hinterlegt");
     await getToken(SCOPE_CALENDAR, interactive);
+    const calId = await this.ensureCalendar();
+    const events = `${calPath(calId)}/events`;
 
     let angelegt = 0, aktualisiert = 0, entfernt = 0;
     for (const p of Store.db.persons) {
       if (p.birthdayReminder && hasBirthday(p)) {
         if (p.calendarEventId) {
           try {
-            await api(SCOPE_CALENDAR, `${base}/${p.calendarEventId}`, { method: "PATCH", ...json(eventBody(p)) });
+            await api(SCOPE_CALENDAR, `${events}/${enc(p.calendarEventId)}`,
+              { method: "PATCH", ...json(eventBody(p)) });
             aktualisiert++;
             continue;
           } catch (e) {
             Store.setCalendarEventId(p.id, null); // im Kalender gelöscht → neu anlegen
           }
         }
-        const resp = await api(SCOPE_CALENDAR, base, { method: "POST", ...json(eventBody(p)) });
+        const resp = await api(SCOPE_CALENDAR, events, { method: "POST", ...json(eventBody(p)) });
         Store.setCalendarEventId(p.id, (await resp.json()).id);
         angelegt++;
       } else if (p.calendarEventId) {
         try {
-          await api(SCOPE_CALENDAR, `${base}/${p.calendarEventId}`, { method: "DELETE" });
+          await api(SCOPE_CALENDAR, `${events}/${enc(p.calendarEventId)}`, { method: "DELETE" });
         } catch (e) { /* schon weg — auch gut */ }
         Store.setCalendarEventId(p.id, null);
         entfernt++;
