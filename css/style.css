@@ -263,21 +263,62 @@ body {
   cursor: pointer;
 }
 
-.tag-admin { display: flex; flex-direction: column; gap: 6px; }
-.tag-admin-row {
+/* Listen aus antippbaren Zeilen: Einstellungs-Übersicht und Kategorien.
+   Die Beschriftung darf nie an Knöpfen daneben scheitern — die Aktionen
+   stecken hinter der Zeile, nicht neben ihr. */
+.row-list { display: flex; flex-direction: column; gap: 6px; }
+.row-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 10px;
   background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.row-item:active { background: var(--border); }
+.row-icon { font-size: 1.25rem; line-height: 1; flex: none; }
+.row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.row-title { font-weight: 500; }
+.row-hint { font-size: 0.78rem; color: var(--muted); }
+.row-count { font-size: 0.8rem; color: var(--muted); }
+.row-chevron { color: var(--muted); flex: none; }
+
+/* Aktionen im Dialog: volle Breite, damit nichts abgeschnitten wird */
+.action-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; }
+.action-item {
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.action-item:active { border-color: var(--accent); }
+.action-item.danger { color: var(--danger); border-color: var(--danger); }
+
+.icon-btn {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
   border-radius: 9px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
 }
-.tag-admin-name { flex: 1; font-weight: 500; }
-.tag-admin-count {
-  font-size: 0.78rem;
-  min-width: 22px;
-  text-align: right;
-}
+.icon-btn.danger { color: var(--danger); border-color: var(--danger); }
+.icon-btn:active { border-color: var(--accent); }
 .settings .input-row input {
   flex: 1;
   border: 1px solid var(--border);

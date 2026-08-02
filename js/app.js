@@ -30,6 +30,9 @@ document.querySelectorAll(".tab").forEach(btn => {
 });
 
 function showTab(tab) {
+  // Der Griff auf „Einstellungen“ führt immer auf die Übersicht, nie mitten
+  // in die zuletzt geöffnete Unterseite.
+  if (tab === "settings") settingsPage = null;
   currentTab = tab;
   document.querySelectorAll(".tab").forEach(b =>
     b.classList.toggle("active", b.dataset.tab === tab));
@@ -736,359 +739,451 @@ function openPersonPicker(title, onPick, excludeId) {
 function closeModal() { modalRoot.innerHTML = ""; }
 
 // ---------- Ansicht: Einstellungen ----------
+//
+// Die Einstellungen sind eine Übersicht aus Knöpfen; jeder führt auf eine
+// eigene Seite. Auf der Übersicht steht nur, worum es geht — Erklärungen und
+// Bedienelemente stehen dort, wo sie gebraucht werden. Das hält die erste
+// Ebene kurz und macht sie auf dem Handy überschaubar.
+
+let settingsPage = null; // null = Übersicht, sonst Schlüssel der Unterseite
+
+const SETTINGS_PAGES = [
+  {
+    key: "drive", icon: "☁️", title: "Google Drive",
+    hint: () => statusText(Drive.status, ""),
+    body: s => `
+      <p class="muted small-text">Deine Daten liegen als Datei „personen-gedaechtnis.json“ in deinem Google Drive. Die App sieht nur diese eine Datei.</p>
+      <label>Google Client-ID<input id="s-gcid" value="${esc(s.googleClientId)}" placeholder="…apps.googleusercontent.com"></label>
+      <div class="settings-row">
+        <button id="s-connect" class="btn primary">Verbinden</button>
+        <span id="drive-status-text" class="muted small-text">${statusText(Drive.status, "")}</span>
+      </div>`,
+    wire: () => {
+      document.getElementById("s-gcid").addEventListener("input",
+        e => Settings.set("googleClientId", e.target.value.trim()));
+      document.getElementById("s-connect").addEventListener("click", async () => {
+        Settings.set("googleClientId", document.getElementById("s-gcid").value.trim());
+        if (!Settings.data.googleClientId) { alert("Bitte zuerst die Google Client-ID eintragen."); return; }
+        await Drive.connect(true);
+      });
+    },
+  },
+
+  {
+    key: "birthdays", icon: "🎂", title: "Geburtstags-Erinnerungen",
+    hint: () => `${Calendar.pending()} ${Calendar.pending() === 1 ? "Erinnerung" : "Erinnerungen"} aktiv`,
+    body: s => `
+      <p class="muted small-text">Die Geburtstage landen in einem eigenen Google-Kalender. Das Erinnern übernimmt dann der Kalender — auch wenn die App nicht offen ist.</p>
+      ${Calendar.legacyDropped ? `<p class="muted small-text">⚠ Frühere Erinnerungen lagen in deinem Hauptkalender. Die App verwaltet sie dort nicht mehr — bitte lösche sie einmalig von Hand in Google Kalender.</p>` : ""}
+      <label class="toggle-row">
+        <input type="checkbox" id="s-cal" ${s.calendarEnabled ? "checked" : ""}>
+        Automatisch abgleichen
+      </label>
+      <label>Name des Kalenders
+        <input id="s-cal-name" value="${esc(s.calendarName)}" placeholder="Geburtstage" readonly></label>
+      <div class="settings-row">
+        <button id="s-cal-name-edit" class="btn ghost small">Namen ändern</button>
+      </div>
+      <label>Erinnerung wie viele Tage vorher (0 = am Tag selbst)
+        <input id="s-cal-lead" type="number" min="0" max="28" value="${s.calendarLeadDays}"></label>
+      <p class="muted small-text">${s.calendarId
+        ? "Der Kalender ist angelegt. Ein geänderter Name wird beim nächsten Abgleich übernommen."
+        : "Der Kalender wird beim ersten Abgleich angelegt."}</p>
+      <div class="settings-row">
+        <button id="s-cal-sync" class="btn primary">Jetzt abgleichen</button>
+        <button id="s-cal-reauth" class="btn ghost small">Zugriff neu erteilen</button>
+      </div>
+      <p id="cal-status" class="muted small-text">${Calendar.pending()} ${Calendar.pending() === 1 ? "Erinnerung" : "Erinnerungen"} aktiv</p>`,
+    wire: () => {
+      document.getElementById("s-cal").addEventListener("change",
+        e => Settings.set("calendarEnabled", e.target.checked));
+
+      // Der Kalendername ist gesperrt, bis man ihn ausdrücklich ändern will —
+      // er hängt an einem echten Kalender in Google, das verstellt man nicht nebenbei.
+      const calName = document.getElementById("s-cal-name");
+      const calNameBtn = document.getElementById("s-cal-name-edit");
+      calNameBtn.addEventListener("click", () => {
+        if (calName.readOnly) {
+          calName.readOnly = false;
+          calName.focus();
+          calName.select();
+          calNameBtn.textContent = "Übernehmen";
+          return;
+        }
+        const neu = calName.value.trim();
+        if (!neu) { alert("Bitte einen Namen für den Kalender angeben."); calName.focus(); return; }
+        Settings.set("calendarName", neu);
+        calName.value = neu;
+        calName.readOnly = true;
+        calNameBtn.textContent = "Namen ändern";
+      });
+      calName.addEventListener("keydown", e => {
+        if (e.key === "Enter" && !calName.readOnly) { e.preventDefault(); calNameBtn.click(); }
+      });
+
+      document.getElementById("s-cal-lead").addEventListener("change", e => {
+        const days = Math.max(0, Math.min(28, Number(e.target.value) || 0));
+        e.target.value = days;
+        Settings.set("calendarLeadDays", days);
+      });
+
+      async function runCalendarSync(forceConsent) {
+        const status = document.getElementById("cal-status");
+        if (!Settings.data.googleClientId) {
+          alert("Bitte zuerst unter „Google Drive“ die Client-ID eintragen.");
+          return;
+        }
+        status.textContent = forceConsent ? "Frage Zugriff neu an …" : "Gleiche ab …";
+        try {
+          const r = await Calendar.sync(true, forceConsent);
+          Settings.set("calendarEnabled", true);
+          const zusammenfassung = `${r.angelegt} neu · ${r.aktualisiert} aktualisiert · ${r.entfernt} entfernt`;
+          renderSettings(); // Kalendername und Status nachziehen
+          document.getElementById("cal-status").textContent =
+            zusammenfassung + (r.warnungen.length ? " — " + r.warnungen.join(" ") : "");
+        } catch (e) {
+          status.textContent = "Fehler: " + e.message;
+        }
+      }
+      document.getElementById("s-cal-sync").addEventListener("click", () => runCalendarSync(false));
+      document.getElementById("s-cal-reauth").addEventListener("click", () => runCalendarSync(true));
+    },
+  },
+
+  {
+    key: "tags", icon: "🏷️", title: "Kategorien",
+    hint: () => `${Store.allTags().length} Kategorien`,
+    body: () => `
+      <p class="muted small-text">Jede Person gehört zu mindestens einer Kategorie. „Unsortiert“ ist das Auffangnetz und lässt sich nicht löschen. Tippe eine Kategorie an, um sie zu bearbeiten.</p>
+      <div class="row-list">
+        ${Store.allTags().map(t => {
+          const count = Store.personsWithTag(t.id).length;
+          return `<button class="row-item" data-tag="${t.id}">
+            <span class="row-title">${esc(t.name)}</span>
+            <span class="row-count">${count}</span>
+            <span class="row-chevron">›</span>
+          </button>`;
+        }).join("")}
+      </div>
+      <div class="input-row" style="margin-top:10px">
+        <input id="new-tag" placeholder="Neue Kategorie …">
+        <button id="add-tag" class="btn primary">+</button>
+      </div>`,
+    wire: () => {
+      const newTagInput = document.getElementById("new-tag");
+      document.getElementById("add-tag").addEventListener("click", () => {
+        if (!newTagInput.value.trim()) return;
+        Store.createTag(newTagInput.value);
+        renderSettings();
+      });
+      newTagInput.addEventListener("keydown", e => {
+        if (e.key === "Enter") { e.preventDefault(); document.getElementById("add-tag").click(); }
+      });
+      view.querySelectorAll("[data-tag]").forEach(row =>
+        row.addEventListener("click", () => openTagActions(row.dataset.tag)));
+    },
+  },
+
+  {
+    key: "import", icon: "📥", title: "Import aus Kalender",
+    hint: () => "Personen aus einer .ics-Datei",
+    body: () => `
+      <p class="muted small-text">Legt Personen aus einer Kalenderdatei (.ics) an. Aus dem Termintitel wird das erste Wort der Vorname, der Rest der Nachname. Google exportiert ein ZIP — daraus die .ics entpacken.</p>
+      <label>Kategorie für die importierten Personen (Pflicht)
+        <select id="imp-tag">
+          <option value="">— bitte wählen —</option>
+          ${Store.allTags().map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}
+        </select></label>
+      <label class="toggle-row">
+        <input type="checkbox" id="imp-year">
+        Das Jahr in dieser Datei ist das echte Geburtsjahr
+      </label>
+      <p class="muted small-text">Ohne Häkchen werden nur Tag und Monat übernommen. Bei selbst angelegten Terminen ist das Jahr meist nur das Jahr der Anlage.</p>
+      <div class="settings-row">
+        <button id="imp-file" class="btn primary" disabled>.ics-Datei wählen</button>
+        <input id="imp-input" type="file" accept=".ics,text/calendar" multiple hidden>
+      </div>
+      <p id="imp-status" class="muted small-text">Bitte zuerst eine Kategorie wählen.</p>`,
+    wire: () => {
+      const impTag = document.getElementById("imp-tag");
+      const impFile = document.getElementById("imp-file");
+      const impInput = document.getElementById("imp-input");
+      const impStatus = document.getElementById("imp-status");
+
+      // Ohne Kategorie wird nicht importiert — der Knopf bleibt gesperrt, damit
+      // niemand erst eine Datei aussucht und dann abgewiesen wird.
+      const chosenTag = () => (impTag.value ? Store.getTag(impTag.value) : null);
+      function refreshImportState() {
+        const tag = chosenTag();
+        impFile.disabled = !tag;
+        impStatus.textContent = tag
+          ? `Importierte Personen kommen nach „${tag.name}“.`
+          : "Bitte zuerst eine Kategorie wählen.";
+      }
+      impTag.addEventListener("change", refreshImportState);
+      refreshImportState();
+
+      impFile.addEventListener("click", () => impInput.click());
+      impInput.addEventListener("change", async () => {
+        const files = [...impInput.files];
+        impInput.value = ""; // damit dieselbe Datei erneut gewählt werden kann
+        if (!files.length) return;
+        const tag = chosenTag();
+        if (!tag) return;
+        const nimmJahr = document.getElementById("imp-year").checked;
+
+        let angelegt = 0, uebersprungen = 0;
+        try {
+          for (const file of files) {
+            for (const ev of parseIcs(await file.text())) {
+              const { firstName, lastName } = nameFromSummary(ev.summary);
+              if (!firstName) { uebersprungen++; continue; }
+              const p = Store.createPerson({
+                firstName, lastName,
+                ...(nimmJahr
+                  ? { birthDate: `${ev.year}-${String(ev.month).padStart(2, "0")}-${String(ev.day).padStart(2, "0")}` }
+                  : { birthDayMonth: `${ev.day}.${ev.month}.` }),
+              });
+              Store.addTagToPerson(p.id, tag.id);
+              angelegt++;
+            }
+          }
+        } catch (e) {
+          impStatus.textContent = "Datei konnte nicht gelesen werden: " + e.message;
+          return;
+        }
+        renderSettings();
+        document.getElementById("imp-status").textContent =
+          `${angelegt} ${angelegt === 1 ? "Person" : "Personen"} nach „${tag.name}“ importiert` +
+          (uebersprungen ? ` · ${uebersprungen} ohne verwertbaren Namen übersprungen` : "");
+      });
+    },
+  },
+
+  {
+    key: "trash", icon: "🗑️", title: "Papierkorb",
+    hint: () => {
+      const n = Store.trash().length;
+      return n ? `${n} ${n === 1 ? "Person" : "Personen"}` : "leer";
+    },
+    body: () => Store.trash().length === 0
+      ? `<p class="muted small-text">Leer. Gelöschte Personen landen hier und lassen sich zurückholen.</p>`
+      : `<p class="muted small-text">Beim Wiederherstellen kommen auch Partner, Eltern, Kinder und Beziehungen zurück, soweit die Gegenstellen noch existieren.</p>
+        <div class="row-list">
+          ${Store.trash().map(e => `
+            <div class="trash-row" data-id="${e.person.id}">
+              <div class="trash-main">
+                <div>${esc(fullName(e.person))}</div>
+                <div class="muted small-text">gelöscht am ${new Date(e.deletedAt).toLocaleDateString("de-DE")}</div>
+              </div>
+              <button class="icon-btn trash-restore" title="Zurückholen">↩</button>
+              <button class="icon-btn danger trash-purge" title="Endgültig löschen">✕</button>
+            </div>`).join("")}
+        </div>
+        <div class="settings-row" style="margin-top:10px">
+          <button id="trash-empty" class="btn ghost danger small">Papierkorb leeren</button>
+        </div>`,
+    wire: () => {
+      view.querySelectorAll(".trash-restore").forEach(btn =>
+        btn.addEventListener("click", () => {
+          const id = btn.closest(".trash-row").dataset.id;
+          if (Store.restorePerson(id)) renderSettings();
+          else alert("Diese Person konnte nicht wiederhergestellt werden.");
+        }));
+
+      view.querySelectorAll(".trash-purge").forEach(btn =>
+        btn.addEventListener("click", () => {
+          const row = btn.closest(".trash-row");
+          const name = row.querySelector(".trash-main div").textContent;
+          if (confirm(`${name} endgültig löschen? Das lässt sich nicht rückgängig machen.`)) {
+            Store.purgePerson(row.dataset.id);
+            renderSettings();
+          }
+        }));
+
+      const trashEmpty = document.getElementById("trash-empty");
+      if (trashEmpty) trashEmpty.addEventListener("click", () => {
+        const n = Store.trash().length;
+        if (confirm(`Papierkorb leeren? ${n} ${n === 1 ? "Person wird" : "Personen werden"} endgültig gelöscht. Das lässt sich nicht rückgängig machen.`)) {
+          Store.emptyTrash();
+          renderSettings();
+        }
+      });
+    },
+  },
+
+  {
+    key: "ai", icon: "🤖", title: "KI-Verstehen",
+    hint: () => (Settings.data.anthropicKey ? "Schlüssel gespeichert ✓" : "kein Schlüssel"),
+    body: s => `
+      <p class="muted small-text">Für frei formulierte Sprachbefehle. Einfache Fragen beantwortet die App auch ohne Schlüssel.</p>
+      <label>Anthropic-API-Schlüssel<input id="s-akey" type="password" value="${esc(s.anthropicKey)}" placeholder="sk-ant-…"></label>
+      <div class="settings-row">
+        <button id="s-akey-save" class="btn primary">Schlüssel speichern</button>
+        <span id="s-akey-status" class="muted small-text">${s.anthropicKey ? "Schlüssel gespeichert ✓" : "Noch kein Schlüssel gespeichert"}</span>
+      </div>`,
+    wire: () => {
+      document.getElementById("s-akey").addEventListener("input",
+        e => Settings.set("anthropicKey", e.target.value.trim()));
+      document.getElementById("s-akey-save").addEventListener("click", () => {
+        Settings.set("anthropicKey", document.getElementById("s-akey").value.trim());
+        document.getElementById("s-akey-status").textContent =
+          Settings.data.anthropicKey ? "Schlüssel gespeichert ✓" : "Das Feld ist leer.";
+      });
+    },
+  },
+
+  {
+    key: "tts", icon: "🔊", title: "Sprachausgabe",
+    hint: () => (Settings.data.ttsEnabled ? "an" : "aus"),
+    body: s => `
+      <p class="muted small-text">Liest die Antworten des Assistenten mit der eingebauten Stimme des Geräts vor.</p>
+      <label class="toggle-row">
+        <input type="checkbox" id="s-tts" ${s.ttsEnabled ? "checked" : ""}>
+        Antworten vorlesen
+      </label>`,
+    wire: () => {
+      document.getElementById("s-tts").addEventListener("change",
+        e => Settings.set("ttsEnabled", e.target.checked));
+    },
+  },
+
+  {
+    key: "backup", icon: "💾", title: "Datensicherung",
+    hint: () => `${Store.db.persons.length} ${Store.db.persons.length === 1 ? "Person" : "Personen"}`,
+    body: () => `
+      <p class="muted small-text">${Store.db.persons.length} Personen gespeichert${Store.db.updatedAt ? " · Stand " + new Date(Store.db.updatedAt).toLocaleString("de-DE") : ""}. Der Export enthält alles, auch den Papierkorb.</p>
+      <div class="settings-row">
+        <button id="s-export" class="btn ghost">Exportieren</button>
+        <button id="s-import" class="btn ghost">Importieren</button>
+        <input id="s-import-file" type="file" accept=".json" hidden>
+      </div>
+      <p class="muted small-text">Achtung: Ein Import ersetzt den gesamten Datenbestand.</p>`,
+    wire: () => {
+      document.getElementById("s-export").addEventListener("click", () => {
+        const blob = new Blob([JSON.stringify(Store.db, null, 2)], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "personen-gedaechtnis-backup.json";
+        a.click();
+      });
+      const importFile = document.getElementById("s-import-file");
+      document.getElementById("s-import").addEventListener("click", () => importFile.click());
+      importFile.addEventListener("change", async () => {
+        const file = importFile.files[0];
+        if (!file) return;
+        try {
+          const data = JSON.parse(await file.text());
+          if (!Array.isArray(data.persons)) throw new Error("Ungültiges Format");
+          if (confirm(`${data.persons.length} Personen importieren? Ersetzt den aktuellen Datenbestand.`)) {
+            Store.replaceDb(data);
+            Store.save(); // als neueste Version markieren, damit Drive sie übernimmt
+            renderSettings();
+          }
+        } catch (e) { alert("Datei konnte nicht gelesen werden: " + e.message); }
+      });
+    },
+  },
+];
 
 function renderSettings() {
-  const s = Settings.data;
+  const page = SETTINGS_PAGES.find(p => p.key === settingsPage);
+  if (!page) { settingsPage = null; return renderSettingsMenu(); }
   view.innerHTML = `
     <div class="settings">
+      <button id="s-back" class="btn ghost">‹ Einstellungen</button>
       <div class="card">
-        <h3>Google Drive</h3>
-        <p class="muted small-text">Deine Daten werden als Datei „personen-gedaechtnis.json" in deinem Google Drive gespeichert. Die App sieht nur diese eine Datei.</p>
-        <label>Google Client-ID<input id="s-gcid" value="${esc(s.googleClientId)}" placeholder="…apps.googleusercontent.com"></label>
-        <div class="settings-row">
-          <button id="s-connect" class="btn primary">Mit Google Drive verbinden</button>
-          <span id="drive-status-text" class="muted">${statusText(Drive.status, "")}</span>
-        </div>
+        <h3>${page.icon} ${esc(page.title)}</h3>
+        ${page.body(Settings.data)}
       </div>
+    </div>`;
+  document.getElementById("s-back").addEventListener("click", () => {
+    settingsPage = null;
+    renderSettings();
+  });
+  page.wire();
+}
 
-      <div class="card">
-        <h3>KI-Verstehen (Claude)</h3>
-        <p class="muted small-text">Für frei formulierte Sprachbefehle. Einfache Fragen beantwortet die App auch ohne Schlüssel.</p>
-        <label>Anthropic-API-Schlüssel<input id="s-akey" type="password" value="${esc(s.anthropicKey)}" placeholder="sk-ant-…"></label>
-        <div class="settings-row">
-          <button id="s-akey-save" class="btn primary">Schlüssel speichern</button>
-          <span id="s-akey-status" class="muted">${s.anthropicKey ? "Schlüssel gespeichert ✓" : "Noch kein Schlüssel gespeichert"}</span>
-        </div>
+function renderSettingsMenu() {
+  view.innerHTML = `
+    <div class="settings">
+      <div class="row-list">
+        ${SETTINGS_PAGES.map(p => `
+          <button class="row-item" data-page="${p.key}">
+            <span class="row-icon">${p.icon}</span>
+            <span class="row-text">
+              <span class="row-title">${esc(p.title)}</span>
+              <span class="row-hint">${esc(p.hint())}</span>
+            </span>
+            <span class="row-chevron">›</span>
+          </button>`).join("")}
       </div>
+    </div>`;
+  view.querySelectorAll("[data-page]").forEach(btn =>
+    btn.addEventListener("click", () => {
+      settingsPage = btn.dataset.page;
+      renderSettings();
+    }));
+}
 
-      <div class="card">
-        <h3>Kategorien</h3>
-        <p class="muted small-text">Jede Person gehört zu mindestens einer Kategorie. „Unsortiert" ist das Auffangnetz und lässt sich nicht löschen.</p>
-        <div id="tag-admin" class="tag-admin">
-          ${Store.allTags().map(t => {
-            const count = Store.personsWithTag(t.id).length;
-            const locked = t.id === UNSORTED_TAG_ID;
-            return `<div class="tag-admin-row" data-tag="${t.id}">
-              <span class="tag-admin-name">${esc(t.name)}</span>
-              <span class="muted tag-admin-count">${count}</span>
-              ${count ? `<button class="btn small ghost danger tag-purge" title="Alle Personen dieser Kategorie in den Papierkorb legen">Personen löschen</button>` : ""}
-              ${locked ? `<span class="muted small-text">fest</span>` : `
-                <button class="btn small ghost tag-rename">Umbenennen</button>
-                <button class="btn small ghost danger tag-delete">Löschen</button>`}
-            </div>`;
-          }).join("")}
-        </div>
-        <div class="input-row" style="margin-top:10px">
-          <input id="new-tag" placeholder="Neue Kategorie …">
-          <button id="add-tag" class="btn primary">+</button>
-        </div>
-      </div>
+// Aktionen einer Kategorie im Dialog statt als Knopfreihe: Auf dem Handy
+// passten drei beschriftete Knöpfe nicht nebeneinander, das letzte Wort wurde
+// abgeschnitten. Hier ist Platz für verständliche Beschriftungen.
+function openTagActions(tagId) {
+  const tag = Store.getTag(tagId);
+  if (!tag) return;
+  const count = Store.personsWithTag(tag.id).length;
+  const locked = tag.id === UNSORTED_TAG_ID;
 
-      <div class="card">
-        <h3>Geburtstags-Erinnerungen</h3>
-        <p class="muted small-text">Die Geburtstage landen in einem eigenen Google-Kalender. Das Erinnern übernimmt dann der Kalender — auch wenn die App nicht offen ist.</p>
-        ${Calendar.legacyDropped ? `<p class="muted small-text">⚠ Frühere Erinnerungen lagen in deinem Hauptkalender. Die App verwaltet sie dort nicht mehr — bitte lösche sie einmalig von Hand in Google Kalender.</p>` : ""}
-        <label class="toggle-row">
-          <input type="checkbox" id="s-cal" ${s.calendarEnabled ? "checked" : ""}>
-          Geburtstage automatisch abgleichen
-        </label>
-        <label>Name des Kalenders
-          <input id="s-cal-name" value="${esc(s.calendarName)}" placeholder="Geburtstage" readonly></label>
-        <div class="settings-row">
-          <button id="s-cal-name-edit" class="btn ghost small">Namen ändern</button>
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h2>${esc(tag.name)}</h2>
+        <p class="muted small-text">${count} ${count === 1 ? "Person" : "Personen"}${locked ? " · Auffangnetz, lässt sich nicht löschen" : ""}</p>
+        <div class="action-list">
+          ${locked ? "" : `<button class="action-item" data-act="rename">✏️ Umbenennen</button>`}
+          ${count ? `<button class="action-item danger" data-act="purge">🧹 Personen in den Papierkorb</button>` : ""}
+          ${locked ? "" : `<button class="action-item danger" data-act="delete">🗑️ Kategorie löschen</button>`}
         </div>
-        <label>Erinnerung wie viele Tage vorher (0 = am Tag selbst)
-          <input id="s-cal-lead" type="number" min="0" max="28" value="${s.calendarLeadDays}"></label>
-        <p class="muted small-text">${s.calendarId
-          ? "Der Kalender ist angelegt. Ein geänderter Name wird beim nächsten Abgleich übernommen."
-          : "Der Kalender wird beim ersten Abgleich angelegt."}</p>
-        <div class="settings-row">
-          <button id="s-cal-sync" class="btn primary">Jetzt abgleichen</button>
-          <button id="s-cal-reauth" class="btn ghost small">Zugriff neu erteilen</button>
+        <div class="modal-actions">
+          <button id="ta-cancel" class="btn ghost">Abbrechen</button>
         </div>
-        <p id="cal-status" class="muted small-text">${Calendar.pending()} ${Calendar.pending() === 1 ? "Erinnerung" : "Erinnerungen"} aktiv</p>
-      </div>
-
-      <div class="card">
-        <h3>Sprachausgabe</h3>
-        <label class="toggle-row">
-          <input type="checkbox" id="s-tts" ${s.ttsEnabled ? "checked" : ""}>
-          Antworten vorlesen
-        </label>
-      </div>
-
-      <div class="card">
-        <h3>Geburtstage aus Kalender importieren</h3>
-        <p class="muted small-text">Legt Personen aus einer Kalenderdatei (.ics) an. Aus dem Termintitel wird das erste Wort der Vorname, der Rest der Nachname. Google exportiert ein ZIP — daraus die .ics entpacken.</p>
-        <label>Kategorie für die importierten Personen (Pflicht)
-          <select id="imp-tag">
-            <option value="">— bitte wählen —</option>
-            ${Store.allTags().map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}
-          </select></label>
-        <label class="toggle-row">
-          <input type="checkbox" id="imp-year">
-          Das Jahr in dieser Datei ist das echte Geburtsjahr
-        </label>
-        <p class="muted small-text">Ohne Häkchen werden nur Tag und Monat übernommen. Bei selbst angelegten Terminen ist das Jahr meist nur das Jahr der Anlage.</p>
-        <div class="settings-row">
-          <button id="imp-file" class="btn primary" disabled>.ics-Datei wählen</button>
-          <input id="imp-input" type="file" accept=".ics,text/calendar" multiple hidden>
-          <span id="imp-status" class="muted small-text">Bitte zuerst eine Kategorie wählen.</span>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>Papierkorb</h3>
-        ${Store.trash().length === 0
-          ? `<p class="muted small-text">Leer. Gelöschte Personen landen hier und lassen sich zurückholen.</p>`
-          : `<p class="muted small-text">${Store.trash().length} ${Store.trash().length === 1 ? "Person" : "Personen"} gelöscht. Beim Wiederherstellen kommen auch Partner, Eltern, Kinder und Beziehungen zurück, soweit die Gegenstellen noch existieren.</p>
-            <div class="trash-list">
-              ${Store.trash().map(e => `
-                <div class="trash-row" data-id="${e.person.id}">
-                  <div class="trash-main">
-                    <div>${esc(fullName(e.person))}</div>
-                    <div class="muted small-text">gelöscht am ${new Date(e.deletedAt).toLocaleDateString("de-DE")}</div>
-                  </div>
-                  <button class="btn small ghost trash-restore">Zurückholen</button>
-                  <button class="btn small ghost danger trash-purge" title="Endgültig löschen">✕</button>
-                </div>`).join("")}
-            </div>
-            <div class="settings-row" style="margin-top:10px">
-              <button id="trash-empty" class="btn ghost danger small">Papierkorb leeren</button>
-            </div>`}
-      </div>
-
-      <div class="card">
-        <h3>Datensicherung</h3>
-        <div class="settings-row">
-          <button id="s-export" class="btn ghost">Daten exportieren</button>
-          <button id="s-import" class="btn ghost">Daten importieren</button>
-          <input id="s-import-file" type="file" accept=".json" hidden>
-        </div>
-        <p class="muted small-text">${Store.db.persons.length} Personen gespeichert${Store.db.updatedAt ? " · Stand " + new Date(Store.db.updatedAt).toLocaleString("de-DE") : ""}</p>
       </div>
     </div>`;
 
-  document.getElementById("s-gcid").addEventListener("input", e => Settings.set("googleClientId", e.target.value.trim()));
-  document.getElementById("s-akey").addEventListener("input", e => Settings.set("anthropicKey", e.target.value.trim()));
-  document.getElementById("s-akey-save").addEventListener("click", () => {
-    Settings.set("anthropicKey", document.getElementById("s-akey").value.trim());
-    document.getElementById("s-akey-status").textContent =
-      Settings.data.anthropicKey ? "Schlüssel gespeichert ✓" : "Das Feld ist leer.";
-  });
-  document.getElementById("s-tts").addEventListener("change", e => Settings.set("ttsEnabled", e.target.checked));
+  document.getElementById("ta-cancel").addEventListener("click", closeModal);
 
-  document.getElementById("s-cal").addEventListener("change", e =>
-    Settings.set("calendarEnabled", e.target.checked));
-  // Der Kalendername ist gesperrt, bis man ihn ausdrücklich ändern will —
-  // er hängt an einem echten Kalender in Google, das verstellt man nicht nebenbei.
-  const calName = document.getElementById("s-cal-name");
-  const calNameBtn = document.getElementById("s-cal-name-edit");
-  calNameBtn.addEventListener("click", () => {
-    if (calName.readOnly) {
-      calName.readOnly = false;
-      calName.focus();
-      calName.select();
-      calNameBtn.textContent = "Übernehmen";
-      return;
-    }
-    const neu = calName.value.trim();
-    if (!neu) { alert("Bitte einen Namen für den Kalender angeben."); calName.focus(); return; }
-    Settings.set("calendarName", neu);
-    calName.value = neu;
-    calName.readOnly = true;
-    calNameBtn.textContent = "Namen ändern";
-  });
-  calName.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !calName.readOnly) { e.preventDefault(); calNameBtn.click(); }
-  });
-  document.getElementById("s-cal-lead").addEventListener("change", e => {
-    const days = Math.max(0, Math.min(28, Number(e.target.value) || 0));
-    e.target.value = days;
-    Settings.set("calendarLeadDays", days);
-  });
-  async function runCalendarSync(forceConsent) {
-    const status = document.getElementById("cal-status");
-    Settings.set("googleClientId", document.getElementById("s-gcid").value.trim());
-    if (!Settings.data.googleClientId) { alert("Bitte zuerst die Google Client-ID eintragen."); return; }
-    status.textContent = forceConsent ? "Frage Zugriff neu an …" : "Gleiche ab …";
-    try {
-      const r = await Calendar.sync(true, forceConsent);
-      Settings.set("calendarEnabled", true);
-      const zusammenfassung = `${r.angelegt} neu · ${r.aktualisiert} aktualisiert · ${r.entfernt} entfernt`;
-      renderSettings(); // Kalendername/-status in der Ansicht nachziehen
-      document.getElementById("cal-status").textContent =
-        zusammenfassung + (r.warnungen.length ? " — " + r.warnungen.join(" ") : "");
-    } catch (e) {
-      status.textContent = "Fehler: " + e.message;
-    }
-  }
-
-  document.getElementById("s-cal-sync").addEventListener("click", () => runCalendarSync(false));
-  document.getElementById("s-cal-reauth").addEventListener("click", () => runCalendarSync(true));
-
-  const newTagInput = document.getElementById("new-tag");
-  document.getElementById("add-tag").addEventListener("click", () => {
-    if (!newTagInput.value.trim()) return;
-    Store.createTag(newTagInput.value);
-    renderSettings();
-  });
-  newTagInput.addEventListener("keydown", e => {
-    if (e.key === "Enter") { e.preventDefault(); document.getElementById("add-tag").click(); }
-  });
-
-  view.querySelectorAll(".tag-purge").forEach(btn =>
+  modalRoot.querySelectorAll("[data-act]").forEach(btn =>
     btn.addEventListener("click", () => {
-      const tag = Store.getTag(btn.closest(".tag-admin-row").dataset.tag);
-      const betroffen = Store.personsWithTag(tag.id);
-      // Wer noch woanders einsortiert ist, wird trotzdem gelöscht — das muss
-      // vorher auf dem Tisch liegen, sonst verschwinden Leute unbemerkt.
-      const auchWoanders = betroffen.filter(p => p.tagIds.length > 1);
-      const warnung = auchWoanders.length
-        ? `\n\nDavon ${auchWoanders.length} auch in anderen Kategorien:\n` +
-          auchWoanders.slice(0, 8).map(p =>
-            `• ${fullName(p)} (${Store.tagsOf(p.id).map(t => t.name).join(", ")})`).join("\n") +
-          (auchWoanders.length > 8 ? `\n… und ${auchWoanders.length - 8} weitere` : "")
-        : "";
-      if (confirm(
-        `${betroffen.length} ${betroffen.length === 1 ? "Person" : "Personen"} aus „${tag.name}“ löschen?${warnung}` +
-        `\n\nAlle landen im Papierkorb und lassen sich von dort wiederherstellen.`)) {
-        const n = Store.deletePersonsWithTag(tag.id);
-        renderSettings();
-        alert(`${n} ${n === 1 ? "Person" : "Personen"} in den Papierkorb verschoben.`);
+      const act = btn.dataset.act;
+      if (act === "rename") {
+        const name = prompt(`Kategorie „${tag.name}“ umbenennen in:`, tag.name);
+        if (name && name.trim()) Store.renameTag(tag.id, name);
+      } else if (act === "purge") {
+        const betroffen = Store.personsWithTag(tag.id);
+        // Wer noch woanders einsortiert ist, wird trotzdem gelöscht — das muss
+        // vorher auf dem Tisch liegen, sonst verschwinden Leute unbemerkt.
+        const auchWoanders = betroffen.filter(p => p.tagIds.length > 1);
+        const warnung = auchWoanders.length
+          ? `\n\nDavon ${auchWoanders.length} auch in anderen Kategorien:\n` +
+            auchWoanders.slice(0, 8).map(p =>
+              `• ${fullName(p)} (${Store.tagsOf(p.id).map(t => t.name).join(", ")})`).join("\n") +
+            (auchWoanders.length > 8 ? `\n… und ${auchWoanders.length - 8} weitere` : "")
+          : "";
+        if (!confirm(
+          `${betroffen.length} ${betroffen.length === 1 ? "Person" : "Personen"} aus „${tag.name}“ löschen?${warnung}` +
+          `\n\nAlle landen im Papierkorb und lassen sich von dort wiederherstellen.`)) return;
+        Store.deletePersonsWithTag(tag.id);
+      } else if (act === "delete") {
+        const warn = count
+          ? `\n\n${count} ${count === 1 ? "Person verliert" : "Personen verlieren"} diese Kategorie; wer danach keine mehr hat, wird „Unsortiert“.`
+          : "";
+        if (!confirm(`Kategorie „${tag.name}“ löschen?${warn}`)) return;
+        Store.deleteTag(tag.id);
       }
-    }));
-
-  view.querySelectorAll(".tag-rename").forEach(btn =>
-    btn.addEventListener("click", () => {
-      const row = btn.closest(".tag-admin-row");
-      const tag = Store.getTag(row.dataset.tag);
-      const name = prompt(`Kategorie „${tag.name}" umbenennen in:`, tag.name);
-      if (name && name.trim()) { Store.renameTag(tag.id, name); renderSettings(); }
-    }));
-
-  view.querySelectorAll(".tag-delete").forEach(btn =>
-    btn.addEventListener("click", () => {
-      const row = btn.closest(".tag-admin-row");
-      const tag = Store.getTag(row.dataset.tag);
-      const count = Store.personsWithTag(tag.id).length;
-      const warn = count
-        ? `\n\n${count} ${count === 1 ? "Person verliert" : "Personen verlieren"} diese Kategorie; wer danach keine mehr hat, wird „Unsortiert".`
-        : "";
-      if (confirm(`Kategorie „${tag.name}" löschen?${warn}`)) { Store.deleteTag(tag.id); renderSettings(); }
-    }));
-
-  document.getElementById("s-connect").addEventListener("click", async () => {
-    Settings.set("googleClientId", document.getElementById("s-gcid").value.trim());
-    if (!Settings.data.googleClientId) { alert("Bitte zuerst die Google Client-ID eintragen."); return; }
-    await Drive.connect(true);
-  });
-
-  // ---- Papierkorb ----
-  view.querySelectorAll(".trash-restore").forEach(btn =>
-    btn.addEventListener("click", () => {
-      const id = btn.closest(".trash-row").dataset.id;
-      if (Store.restorePerson(id)) renderSettings();
-      else alert("Diese Person konnte nicht wiederhergestellt werden.");
-    }));
-
-  view.querySelectorAll(".trash-purge").forEach(btn =>
-    btn.addEventListener("click", () => {
-      const row = btn.closest(".trash-row");
-      const name = row.querySelector(".trash-main div").textContent;
-      if (confirm(`${name} endgültig löschen? Das lässt sich nicht rückgängig machen.`)) {
-        Store.purgePerson(row.dataset.id);
-        renderSettings();
-      }
-    }));
-
-  const trashEmpty = document.getElementById("trash-empty");
-  if (trashEmpty) trashEmpty.addEventListener("click", () => {
-    const n = Store.trash().length;
-    if (confirm(`Papierkorb leeren? ${n} ${n === 1 ? "Person wird" : "Personen werden"} endgültig gelöscht. Das lässt sich nicht rückgängig machen.`)) {
-      Store.emptyTrash();
+      closeModal();
       renderSettings();
-    }
-  });
-
-  // ---- Import aus Kalenderdatei ----
-  const impTag = document.getElementById("imp-tag");
-  const impFile = document.getElementById("imp-file");
-  const impInput = document.getElementById("imp-input");
-  const impStatus = document.getElementById("imp-status");
-
-  // Ohne Kategorie wird nicht importiert — der Knopf bleibt gesperrt, damit
-  // niemand erst eine Datei aussucht und dann abgewiesen wird.
-  const chosenTag = () => (impTag.value ? Store.getTag(impTag.value) : null);
-  function refreshImportState() {
-    const tag = chosenTag();
-    impFile.disabled = !tag;
-    impStatus.textContent = tag
-      ? `Importierte Personen kommen nach „${tag.name}“.`
-      : "Bitte zuerst eine Kategorie wählen.";
-  }
-  impTag.addEventListener("change", refreshImportState);
-  refreshImportState();
-
-  impFile.addEventListener("click", () => impInput.click());
-  impInput.addEventListener("change", async () => {
-    const files = [...impInput.files];
-    impInput.value = ""; // damit dieselbe Datei erneut gewählt werden kann
-    if (!files.length) return;
-
-    const tag = chosenTag();
-    if (!tag) return;
-    const nimmJahr = document.getElementById("imp-year").checked;
-
-    let angelegt = 0, uebersprungen = 0;
-    try {
-      for (const file of files) {
-        for (const ev of parseIcs(await file.text())) {
-          const { firstName, lastName } = nameFromSummary(ev.summary);
-          if (!firstName) { uebersprungen++; continue; }
-          const p = Store.createPerson({
-            firstName, lastName,
-            ...(nimmJahr
-              ? { birthDate: `${ev.year}-${String(ev.month).padStart(2, "0")}-${String(ev.day).padStart(2, "0")}` }
-              : { birthDayMonth: `${ev.day}.${ev.month}.` }),
-          });
-          Store.addTagToPerson(p.id, tag.id);
-          angelegt++;
-        }
-      }
-    } catch (e) {
-      impStatus.textContent = "Datei konnte nicht gelesen werden: " + e.message;
-      return;
-    }
-    renderSettings();
-    document.getElementById("imp-status").textContent =
-      `${angelegt} ${angelegt === 1 ? "Person" : "Personen"} nach „${tag.name}“ importiert` +
-      (uebersprungen ? ` · ${uebersprungen} ohne verwertbaren Namen übersprungen` : "");
-  });
-
-  document.getElementById("s-export").addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(Store.db, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "personen-gedaechtnis-backup.json";
-    a.click();
-  });
-
-  const importFile = document.getElementById("s-import-file");
-  document.getElementById("s-import").addEventListener("click", () => importFile.click());
-  importFile.addEventListener("change", async () => {
-    const file = importFile.files[0];
-    if (!file) return;
-    try {
-      const data = JSON.parse(await file.text());
-      if (!Array.isArray(data.persons)) throw new Error("Ungültiges Format");
-      if (confirm(`${data.persons.length} Personen importieren? Ersetzt den aktuellen Datenbestand.`)) {
-        Store.replaceDb(data);
-        Store.save(); // als neueste Version markieren, damit Drive sie übernimmt
-        renderSettings();
-      }
-    } catch (e) { alert("Datei konnte nicht gelesen werden: " + e.message); }
-  });
+    }));
 }
 
 // ---------- Hilfsfunktionen ----------
