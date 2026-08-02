@@ -176,6 +176,17 @@ export const Calendar = {
         entfernt++;
       }
     }
+    // Termine gelöschter Personen: Die Person ist weg, also läuft sie in der
+    // Schleife oben nicht mehr mit — ohne diese Liste bliebe ihr Geburtstag
+    // für immer im Kalender stehen.
+    for (const eventId of Store.calendarOrphans()) {
+      try {
+        await api(SCOPE_CALENDAR, `${events}/${enc(eventId)}`, { method: "DELETE" });
+      } catch (e) { /* schon weg — auch gut */ }
+      Store.dropCalendarOrphan(eventId);
+      entfernt++;
+    }
+
     const warnungen = await this.applyName(calId);
     return { angelegt, aktualisiert, entfernt, warnungen };
   },

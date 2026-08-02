@@ -771,6 +771,7 @@ function renderSettings() {
             return `<div class="tag-admin-row" data-tag="${t.id}">
               <span class="tag-admin-name">${esc(t.name)}</span>
               <span class="muted tag-admin-count">${count}</span>
+              ${count ? `<button class="btn small ghost danger tag-purge" title="Alle Personen dieser Kategorie in den Papierkorb legen">Personen löschen</button>` : ""}
               ${locked ? `<span class="muted small-text">fest</span>` : `
                 <button class="btn small ghost tag-rename">Umbenennen</button>
                 <button class="btn small ghost danger tag-delete">Löschen</button>`}
@@ -834,6 +835,27 @@ function renderSettings() {
           <input id="imp-input" type="file" accept=".ics,text/calendar" multiple hidden>
           <span id="imp-status" class="muted small-text">Bitte zuerst eine Kategorie wählen.</span>
         </div>
+      </div>
+
+      <div class="card">
+        <h3>Papierkorb</h3>
+        ${Store.trash().length === 0
+          ? `<p class="muted small-text">Leer. Gelöschte Personen landen hier und lassen sich zurückholen.</p>`
+          : `<p class="muted small-text">${Store.trash().length} ${Store.trash().length === 1 ? "Person" : "Personen"} gelöscht. Beim Wiederherstellen kommen auch Partner, Eltern, Kinder und Beziehungen zurück, soweit die Gegenstellen noch existieren.</p>
+            <div class="trash-list">
+              ${Store.trash().map(e => `
+                <div class="trash-row" data-id="${e.person.id}">
+                  <div class="trash-main">
+                    <div>${esc(fullName(e.person))}</div>
+                    <div class="muted small-text">gelöscht am ${new Date(e.deletedAt).toLocaleDateString("de-DE")}</div>
+                  </div>
+                  <button class="btn small ghost trash-restore">Zurückholen</button>
+                  <button class="btn small ghost danger trash-purge" title="Endgültig löschen">✕</button>
+                </div>`).join("")}
+            </div>
+            <div class="settings-row" style="margin-top:10px">
+              <button id="trash-empty" class="btn ghost danger small">Papierkorb leeren</button>
+            </div>`}
       </div>
 
       <div class="card">
@@ -915,6 +937,28 @@ function renderSettings() {
     if (e.key === "Enter") { e.preventDefault(); document.getElementById("add-tag").click(); }
   });
 
+  view.querySelectorAll(".tag-purge").forEach(btn =>
+    btn.addEventListener("click", () => {
+      const tag = Store.getTag(btn.closest(".tag-admin-row").dataset.tag);
+      const betroffen = Store.personsWithTag(tag.id);
+      // Wer noch woanders einsortiert ist, wird trotzdem gelöscht — das muss
+      // vorher auf dem Tisch liegen, sonst verschwinden Leute unbemerkt.
+      const auchWoanders = betroffen.filter(p => p.tagIds.length > 1);
+      const warnung = auchWoanders.length
+        ? `\n\nDavon ${auchWoanders.length} auch in anderen Kategorien:\n` +
+          auchWoanders.slice(0, 8).map(p =>
+            `• ${fullName(p)} (${Store.tagsOf(p.id).map(t => t.name).join(", ")})`).join("\n") +
+          (auchWoanders.length > 8 ? `\n… und ${auchWoanders.length - 8} weitere` : "")
+        : "";
+      if (confirm(
+        `${betroffen.length} ${betroffen.length === 1 ? "Person" : "Personen"} aus „${tag.name}“ löschen?${warnung}` +
+        `\n\nAlle landen im Papierkorb und lassen sich von dort wiederherstellen.`)) {
+        const n = Store.deletePersonsWithTag(tag.id);
+        renderSettings();
+        alert(`${n} ${n === 1 ? "Person" : "Personen"} in den Papierkorb verschoben.`);
+      }
+    }));
+
   view.querySelectorAll(".tag-rename").forEach(btn =>
     btn.addEventListener("click", () => {
       const row = btn.closest(".tag-admin-row");
@@ -938,6 +982,33 @@ function renderSettings() {
     Settings.set("googleClientId", document.getElementById("s-gcid").value.trim());
     if (!Settings.data.googleClientId) { alert("Bitte zuerst die Google Client-ID eintragen."); return; }
     await Drive.connect(true);
+  });
+
+  // ---- Papierkorb ----
+  view.querySelectorAll(".trash-restore").forEach(btn =>
+    btn.addEventListener("click", () => {
+      const id = btn.closest(".trash-row").dataset.id;
+      if (Store.restorePerson(id)) renderSettings();
+      else alert("Diese Person konnte nicht wiederhergestellt werden.");
+    }));
+
+  view.querySelectorAll(".trash-purge").forEach(btn =>
+    btn.addEventListener("click", () => {
+      const row = btn.closest(".trash-row");
+      const name = row.querySelector(".trash-main div").textContent;
+      if (confirm(`${name} endgültig löschen? Das lässt sich nicht rückgängig machen.`)) {
+        Store.purgePerson(row.dataset.id);
+        renderSettings();
+      }
+    }));
+
+  const trashEmpty = document.getElementById("trash-empty");
+  if (trashEmpty) trashEmpty.addEventListener("click", () => {
+    const n = Store.trash().length;
+    if (confirm(`Papierkorb leeren? ${n} ${n === 1 ? "Person wird" : "Personen werden"} endgültig gelöscht. Das lässt sich nicht rückgängig machen.`)) {
+      Store.emptyTrash();
+      renderSettings();
+    }
   });
 
   // ---- Import aus Kalenderdatei ----

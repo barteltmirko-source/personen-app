@@ -515,6 +515,18 @@ body {
 }
 .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
 
+.trash-list { display: flex; flex-direction: column; gap: 6px; max-height: 40dvh; overflow-y: auto; }
+.trash-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--bg);
+  border-radius: 9px;
+}
+.trash-main { flex: 1; min-width: 0; }
+.trash-main .small-text { margin-bottom: 0; }
+
 /* Gesperrte Felder sollen sichtbar gesperrt aussehen, nicht nur nicht reagieren */
 .settings input[readonly] {
   opacity: 0.6;

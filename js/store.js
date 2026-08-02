@@ -34,6 +34,11 @@ export const Store = {
   migrate() {
     let touched = false;
     if (!Array.isArray(this.db.relations)) { this.db.relations = []; touched = true; }
+    if (!Array.isArray(this.db.trash)) { this.db.trash = []; touched = true; }
+    // Termine gelöschter Personen, die beim nächsten Abgleich aus dem
+    // Google-Kalender verschwinden müssen — sonst blieben sie als
+    // Karteileichen stehen, weil die Person selbst nicht mehr da ist.
+    if (!Array.isArray(this.db.calendarOrphans)) { this.db.calendarOrphans = []; touched = true; }
     if (!Array.isArray(this.db.tags)) { this.db.tags = DEFAULT_TAGS.map(t => ({ ...t })); touched = true; }
     if (!this.db.tags.some(t => t.id === UNSORTED_TAG_ID)) {
       this.db.tags.unshift({ id: UNSORTED_TAG_ID, name: "Unsortiert" });
@@ -129,15 +134,95 @@ export const Store = {
     return p;
   },
 
+  // Löschen heißt: ab in den Papierkorb. Weil dabei auch alle Verweise
+  // gekappt werden, wandern sie als Bausatz mit — sonst käme die Person
+  // später allein und ohne Familie zurück.
   deletePerson(id) {
+    const person = this.get(id);
+    if (!person) return false;
+
+    const childIds = this.childrenOf(id).map(c => c.id);
+    const relations = this.db.relations.filter(r => r.fromId === id || r.toId === id);
+
     this.db.persons = this.db.persons.filter(p => p.id !== id);
-    // Verweise aufräumen
     for (const p of this.db.persons) {
       if (p.partnerId === id) p.partnerId = null;
       p.parentIds = p.parentIds.filter(pid => pid !== id);
     }
     this.db.relations = this.db.relations.filter(r => r.fromId !== id && r.toId !== id);
+
+    // Der Kalendertermin gehört zu niemandem mehr — beim nächsten Abgleich weg
+    if (person.calendarEventId) this.db.calendarOrphans.push(person.calendarEventId);
+    this.db.trash.push({
+      person: { ...person, calendarEventId: null },
+      deletedAt: new Date().toISOString(),
+      childIds,
+      relations,
+    });
     this.save();
+    return true;
+  },
+
+  // ---------- Papierkorb ----------
+
+  trash() {
+    return [...this.db.trash].sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+  },
+
+  // Holt die Person zurück und knüpft wieder an, was noch existiert.
+  // Gegenstellen, die inzwischen selbst gelöscht wurden, werden übersprungen.
+  restorePerson(personId) {
+    const idx = this.db.trash.findIndex(e => e.person.id === personId);
+    if (idx < 0 || this.get(personId)) return false;
+    const entry = this.db.trash[idx];
+    const p = entry.person;
+
+    p.parentIds = (p.parentIds || []).filter(pid => this.get(pid));
+    this.db.persons.push(p);
+
+    // Partnerschaft nur wiederherstellen, wenn der andere noch frei ist
+    if (p.partnerId) {
+      const other = this.get(p.partnerId);
+      if (other && !other.partnerId) other.partnerId = p.id;
+      else p.partnerId = null;
+    }
+    for (const childId of entry.childIds || []) {
+      const child = this.get(childId);
+      if (child && !child.parentIds.includes(p.id)) child.parentIds.push(p.id);
+    }
+    for (const rel of entry.relations || []) {
+      if (this.get(rel.fromId) && this.get(rel.toId) &&
+          !this.db.relations.some(r => r.id === rel.id)) {
+        this.db.relations.push(rel);
+      }
+    }
+
+    this.db.trash.splice(idx, 1);
+    this.save();
+    return true;
+  },
+
+  purgePerson(personId) {
+    const before = this.db.trash.length;
+    this.db.trash = this.db.trash.filter(e => e.person.id !== personId);
+    if (this.db.trash.length === before) return false;
+    this.save();
+    return true;
+  },
+
+  emptyTrash() {
+    const count = this.db.trash.length;
+    if (!count) return 0;
+    this.db.trash = [];
+    this.save();
+    return count;
+  },
+
+  // Alle Personen einer Kategorie in den Papierkorb legen
+  deletePersonsWithTag(tagId) {
+    const ids = this.personsWithTag(tagId).map(p => p.id);
+    for (const id of ids) this.deletePerson(id);
+    return ids.length;
   },
 
   get(id) { return this.db.persons.find(p => p.id === id) || null; },
@@ -355,6 +440,15 @@ export const Store = {
     const p = this.get(id);
     if (!p || p.calendarEventId === eventId) return;
     p.calendarEventId = eventId;
+    this.save(false);
+  },
+
+  // Termine, die beim nächsten Abgleich aus dem Kalender fliegen müssen.
+  // Kein markDirty: das ist Buchhaltung der Synchronisation.
+  calendarOrphans() { return [...this.db.calendarOrphans]; },
+
+  dropCalendarOrphan(eventId) {
+    this.db.calendarOrphans = this.db.calendarOrphans.filter(id => id !== eventId);
     this.save(false);
   },
 
