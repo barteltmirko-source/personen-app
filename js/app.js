@@ -749,15 +749,35 @@ let settingsPage = null; // null = Übersicht, sonst Schlüssel der Unterseite
 
 const SETTINGS_PAGES = [
   {
-    key: "drive", icon: "☁️", title: "Google Drive",
-    hint: () => statusText(Drive.status, ""),
+    key: "connections", icon: "🔌", title: "Verbindungen",
+    hint: () => [
+      Drive.status === "verbunden" ? "Google ✓" : "Google —",
+      Settings.data.anthropicKey ? "KI ✓" : "KI —",
+      `Vorlesen ${Settings.data.ttsEnabled ? "an" : "aus"}`,
+    ].join(" · "),
     body: s => `
-      <p class="muted small-text">Deine Daten liegen als Datei „personen-gedaechtnis.json“ in deinem Google Drive. Die App sieht nur diese eine Datei.</p>
+      <h4>Google</h4>
+      <p class="muted small-text">Die Client-ID gilt für beides: die Datensicherung in Drive und den Geburtstagskalender. Deine Daten liegen als einzelne Datei „personen-gedaechtnis.json“ in deinem Drive.</p>
       <label>Google Client-ID<input id="s-gcid" value="${esc(s.googleClientId)}" placeholder="…apps.googleusercontent.com"></label>
       <div class="settings-row">
         <button id="s-connect" class="btn primary">Verbinden</button>
         <span id="drive-status-text" class="muted small-text">${statusText(Drive.status, "")}</span>
-      </div>`,
+      </div>
+
+      <h4>KI-Verstehen (Claude)</h4>
+      <p class="muted small-text">Für frei formulierte Sprachbefehle. Einfache Fragen beantwortet die App auch ohne Schlüssel.</p>
+      <label>Anthropic-API-Schlüssel<input id="s-akey" type="password" value="${esc(s.anthropicKey)}" placeholder="sk-ant-…"></label>
+      <div class="settings-row">
+        <button id="s-akey-save" class="btn primary">Schlüssel speichern</button>
+        <span id="s-akey-status" class="muted small-text">${s.anthropicKey ? "Schlüssel gespeichert ✓" : "Noch kein Schlüssel gespeichert"}</span>
+      </div>
+
+      <h4>Sprachausgabe</h4>
+      <p class="muted small-text">Liest die Antworten des Assistenten mit der eingebauten Stimme des Geräts vor. Läuft ohne Verbindung nach außen.</p>
+      <label class="toggle-row">
+        <input type="checkbox" id="s-tts" ${s.ttsEnabled ? "checked" : ""}>
+        Antworten vorlesen
+      </label>`,
     wire: () => {
       document.getElementById("s-gcid").addEventListener("input",
         e => Settings.set("googleClientId", e.target.value.trim()));
@@ -766,6 +786,17 @@ const SETTINGS_PAGES = [
         if (!Settings.data.googleClientId) { alert("Bitte zuerst die Google Client-ID eintragen."); return; }
         await Drive.connect(true);
       });
+
+      document.getElementById("s-akey").addEventListener("input",
+        e => Settings.set("anthropicKey", e.target.value.trim()));
+      document.getElementById("s-akey-save").addEventListener("click", () => {
+        Settings.set("anthropicKey", document.getElementById("s-akey").value.trim());
+        document.getElementById("s-akey-status").textContent =
+          Settings.data.anthropicKey ? "Schlüssel gespeichert ✓" : "Das Feld ist leer.";
+      });
+
+      document.getElementById("s-tts").addEventListener("change",
+        e => Settings.set("ttsEnabled", e.target.checked));
     },
   },
 
@@ -830,7 +861,7 @@ const SETTINGS_PAGES = [
       async function runCalendarSync(forceConsent) {
         const status = document.getElementById("cal-status");
         if (!Settings.data.googleClientId) {
-          alert("Bitte zuerst unter „Google Drive“ die Client-ID eintragen.");
+          alert("Bitte zuerst unter „Verbindungen“ die Google Client-ID eintragen.");
           return;
         }
         status.textContent = forceConsent ? "Frage Zugriff neu an …" : "Gleiche ab …";
@@ -1009,42 +1040,6 @@ const SETTINGS_PAGES = [
           renderSettings();
         }
       });
-    },
-  },
-
-  {
-    key: "ai", icon: "🤖", title: "KI-Verstehen",
-    hint: () => (Settings.data.anthropicKey ? "Schlüssel gespeichert ✓" : "kein Schlüssel"),
-    body: s => `
-      <p class="muted small-text">Für frei formulierte Sprachbefehle. Einfache Fragen beantwortet die App auch ohne Schlüssel.</p>
-      <label>Anthropic-API-Schlüssel<input id="s-akey" type="password" value="${esc(s.anthropicKey)}" placeholder="sk-ant-…"></label>
-      <div class="settings-row">
-        <button id="s-akey-save" class="btn primary">Schlüssel speichern</button>
-        <span id="s-akey-status" class="muted small-text">${s.anthropicKey ? "Schlüssel gespeichert ✓" : "Noch kein Schlüssel gespeichert"}</span>
-      </div>`,
-    wire: () => {
-      document.getElementById("s-akey").addEventListener("input",
-        e => Settings.set("anthropicKey", e.target.value.trim()));
-      document.getElementById("s-akey-save").addEventListener("click", () => {
-        Settings.set("anthropicKey", document.getElementById("s-akey").value.trim());
-        document.getElementById("s-akey-status").textContent =
-          Settings.data.anthropicKey ? "Schlüssel gespeichert ✓" : "Das Feld ist leer.";
-      });
-    },
-  },
-
-  {
-    key: "tts", icon: "🔊", title: "Sprachausgabe",
-    hint: () => (Settings.data.ttsEnabled ? "an" : "aus"),
-    body: s => `
-      <p class="muted small-text">Liest die Antworten des Assistenten mit der eingebauten Stimme des Geräts vor.</p>
-      <label class="toggle-row">
-        <input type="checkbox" id="s-tts" ${s.ttsEnabled ? "checked" : ""}>
-        Antworten vorlesen
-      </label>`,
-    wire: () => {
-      document.getElementById("s-tts").addEventListener("change",
-        e => Settings.set("ttsEnabled", e.target.checked));
     },
   },
 

@@ -531,6 +531,15 @@ body {
 
 /* ---------- Einstellungen ---------- */
 .settings label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 10px; }
+/* Zwischenüberschrift innerhalb einer Einstellungsseite */
+.settings h4 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 18px 0 6px;
+}
+.settings h4:first-child { margin-top: 0; }
 .settings input[type="text"], .settings input[type="password"], .settings input:not([type]) {
   display: block;
   width: 100%;
