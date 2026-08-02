@@ -145,7 +145,21 @@ export const Calendar = {
     }
   },
 
-  async sync(interactive = false, forceConsent = false) {
+  // Abgleiche werden hintereinander gereiht. Ohne das konnten sich der
+  // automatische und der von Hand ausgelöste Lauf überschneiden: Beide sahen
+  // bei derselben Person „noch kein Termin“ und legten je einen an — der
+  // Geburtstag stand danach doppelt im Kalender.
+  _queue: Promise.resolve(),
+
+  sync(interactive = false, forceConsent = false) {
+    const lauf = this._queue
+      .catch(() => {}) // ein gescheiterter Vorlauf darf den nächsten nicht blockieren
+      .then(() => this.syncNow(interactive, forceConsent));
+    this._queue = lauf.catch(() => {});
+    return lauf;
+  },
+
+  async syncNow(interactive = false, forceConsent = false) {
     if (!this.configured()) throw new Error("Keine Google Client-ID hinterlegt");
     await getToken(SCOPE_CALENDAR, interactive || forceConsent, forceConsent);
     const calId = await this.ensureCalendar();
@@ -187,8 +201,39 @@ export const Calendar = {
       entfernt++;
     }
 
+    entfernt += await this.sweep(events);
     const warnungen = await this.applyName(calId);
     return { angelegt, aktualisiert, entfernt, warnungen };
+  },
+
+  // In diesen Kalender schreibt ausschließlich die App. Ein Termin, auf den
+  // keine Person zeigt, gehört also niemandem mehr — sei es eine Dublette aus
+  // einem früheren doppelten Lauf oder der Rest einer gelöschten Person.
+  // Räumt damit auch auf, was vor dem Reihen der Abgleiche entstanden ist.
+  async sweep(events) {
+    const behalten = new Set(
+      Store.db.persons.map(p => p.calendarEventId).filter(Boolean));
+    let entfernt = 0, pageToken = "";
+    do {
+      const query = `?maxResults=250&singleEvents=false&showDeleted=false` +
+        (pageToken ? `&pageToken=${enc(pageToken)}` : "");
+      let data;
+      try {
+        data = await (await api(SCOPE_CALENDAR, events + query)).json();
+      } catch (e) {
+        console.warn("Aufräumen übersprungen:", e.message);
+        return entfernt;
+      }
+      for (const item of data.items || []) {
+        if (!item.id || behalten.has(item.id)) continue;
+        try {
+          await api(SCOPE_CALENDAR, `${events}/${enc(item.id)}`, { method: "DELETE" });
+          entfernt++;
+        } catch (e) { /* schon weg */ }
+      }
+      pageToken = data.nextPageToken || "";
+    } while (pageToken);
+    return entfernt;
   },
 
   // Nach Änderungen verzögert abgleichen, damit schnelle Folgeänderungen
